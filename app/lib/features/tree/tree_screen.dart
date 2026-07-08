@@ -33,7 +33,6 @@ class _TreeScreenState extends State<TreeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _ensureLoad());
   }
 
-  /// 未登录时先自动登录，再加载数据（首页首次进入与重试时使用）
   /// [forceRefresh] 为 true 时忽略缓存重新请求（如下拉刷新、数据变更后）
   Future<void> _ensureLoad({bool forceRefresh = false}) async {
     if (!mounted) return;

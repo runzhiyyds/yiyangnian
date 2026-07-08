@@ -11,7 +11,7 @@ import '../analytics/store_analytics_screen.dart';
 import '../auth/auth_service.dart';
 import '../tree/tree_data_provider.dart';
 
-/// 启动页：若本地已有 Supabase 会话则预加载首页数据；否则进入登录页
+/// 启动页：等待鉴权初始化；已在本进程内登录则预加载首页数据，否则进入登录页
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -52,8 +52,7 @@ class _SplashScreenState extends State<SplashScreen> {
       return;
     }
     final auth = context.read<AuthService>();
-    // 给 Supabase 从本地恢复会话一点时间（持久化会话在应用更新/重启后自动生效）
-    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await auth.ensureInitialized();
     if (!mounted) return;
     if (!auth.isLoggedIn) {
       _safetyTimer?.cancel();

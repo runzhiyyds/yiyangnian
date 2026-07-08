@@ -1,13 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 
-import 'core/config.dart';
 import 'core/theme.dart';
+import 'features/auth/auth_service.dart';
 import 'router.dart';
 
-class YiyangnianApp extends StatelessWidget {
+class YiyangnianApp extends StatefulWidget {
   const YiyangnianApp({super.key});
+
+  @override
+  State<YiyangnianApp> createState() => _YiyangnianAppState();
+}
+
+class _YiyangnianAppState extends State<YiyangnianApp> {
+  GoRouter? _router;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _router ??= AppRouter.create(context.read<AuthService>());
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -26,7 +40,7 @@ class YiyangnianApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      routerConfig: AppRouter.router,
+      routerConfig: _router!,
     );
   }
 }

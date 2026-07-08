@@ -30,7 +30,6 @@ void main() async {
     };
 
     if (Config.isSupabaseConfigured) {
-      // supabase_flutter 默认将会话持久化到本地；用户首次登录后，同设备上更新/重启会恢复会话
       await Supabase.initialize(
         url: Config.supabaseUrl,
         anonKey: Config.supabaseAnonKey,

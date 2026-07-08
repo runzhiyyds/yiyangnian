@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:provider/provider.dart';
 
 import 'core/config.dart';
 import 'core/route_params.dart';
@@ -25,24 +24,23 @@ import 'features/inventory/inventory_supp_out_edit_screen.dart';
 class AppRouter {
   static final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
-  static final router = GoRouter(
+  static GoRouter create(AuthService auth) => GoRouter(
     navigatorKey: rootNavigatorKey,
     initialLocation: '/splash',
+    refreshListenable: auth,
     redirect: (context, state) {
       final loc = state.matchedLocation;
       if (!Config.isSupabaseConfigured) {
         return loc == '/splash' ? null : '/splash';
       }
-      final auth = context.read<AuthService>();
       if (loc == '/splash') return null;
-      // 已登录访问登录页时直接进入首页
+      // 已在本进程内登录后访问登录页时直接进入首页
       if (auth.isLoggedIn && loc == '/login') return '/home/tree';
-      // 未登录：仅允许启动页与登录页；会话由 Supabase 本地持久化，应用更新与重启后一般无需重新登录
+      // 未登录：仅允许启动页与登录页
       if (!auth.isLoggedIn) {
         if (loc == '/login') return null;
         return '/login';
       }
-      // 已登录时允许进入登录页（切换账号）
       if (loc == '/home' || loc == '/') return '/home/tree';
       return null;
     },
