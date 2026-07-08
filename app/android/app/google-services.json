@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "28078589110",
+    "project_id": "yiyangnian-8acf1",
+    "storage_bucket": "yiyangnian-8acf1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:28078589110:android:b4b4b551f2553862f45217",
+        "android_client_info": {
+          "package_name": "com.yiyangnian.yiyangnian"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAkXlvRkLg9_FF5IRbQLePhAnz3Qp2u0Lg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

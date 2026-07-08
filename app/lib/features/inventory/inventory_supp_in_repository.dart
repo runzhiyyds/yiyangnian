@@ -1,0 +1,67 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'inventory_models.dart';
+
+class InventorySuppInRepository {
+  InventorySuppInRepository(this._client);
+
+  final SupabaseClient _client;
+
+  Future<List<InventorySuppInRecordModel>> getAll() async {
+    final res = await _client
+        .from('inventory_supplementary_in_records')
+        .select()
+        .order('supplement_date', ascending: false)
+        .order('id', ascending: false);
+    return (res as List)
+        .map((e) =>
+            InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  Future<List<InventorySuppInRecordModel>> getBySmallItemId(int storageSmallItemId) async {
+    final res = await _client
+        .from('inventory_supplementary_in_records')
+        .select()
+        .eq('storage_small_item_id', storageSmallItemId)
+        .order('supplement_date', ascending: false)
+        .order('id', ascending: false);
+    return (res as List)
+        .map((e) =>
+            InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  Future<InventorySuppInRecordModel?> getById(int id) async {
+    final res = await _client
+        .from('inventory_supplementary_in_records')
+        .select()
+        .eq('id', id)
+        .maybeSingle();
+    if (res == null) return null;
+    return InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+  }
+
+  Future<InventorySuppInRecordModel> create(InventorySuppInRecordModel record) async {
+    final res = await _client
+        .from('inventory_supplementary_in_records')
+        .insert(record.toJson())
+        .select()
+        .single();
+    return InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+  }
+
+  Future<InventorySuppInRecordModel> update(InventorySuppInRecordModel record) async {
+    final res = await _client
+        .from('inventory_supplementary_in_records')
+        .update(record.toJson())
+        .eq('id', record.id)
+        .select()
+        .single();
+    return InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+  }
+
+  Future<void> delete(int id) async {
+    await _client.from('inventory_supplementary_in_records').delete().eq('id', id);
+  }
+}

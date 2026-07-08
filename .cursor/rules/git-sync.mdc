@@ -1,0 +1,35 @@
+---
+description: 颐养年项目 Git 与 GitHub 同步规范
+alwaysApply: true
+---
+
+# Git 与 GitHub 同步
+
+## 仓库信息
+
+- 远程：`origin` → `https://github.com/runzhiyyds/yiyangnian.git`
+- 默认分支：`main`
+
+## 完成代码变更后的同步流程
+
+每次完成用户请求的代码修改后，除非用户明确说「不要提交/不要推送」，应主动将本地与 GitHub 保持同步：
+
+1. `git status` 与 `git diff` 查看变更
+2. 确认不提交敏感文件（`pgyer_config.sh`、`app/env.json` 等已在 `.gitignore` 中）
+3. `git add` 相关文件
+4. `git commit`（简洁中文或英文说明，聚焦「为什么」）
+5. `git pull --rebase origin main`（若有远程更新）
+6. `git push origin main`
+
+## 约束
+
+- 不修改 git config
+- 不使用 `--force` 推送到 `main`
+- 不跳过 hooks（`--no-verify`）
+- 仅在用户明确要求时 amend 或 force push
+- 用户说「只提交不推送」时，执行到 commit 为止
+
+## 冲突处理
+
+- rebase 冲突：解决后 `git add` + `git rebase --continue`，再 push
+- 无法自动解决时，向用户说明冲突文件并请求指示

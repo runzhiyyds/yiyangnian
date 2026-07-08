@@ -1,0 +1,10 @@
+#!/bin/bash
+# 蒲公英 API 配置示例
+# 复制此文件为 pgyer_config.sh 并填入你的密钥（pgyer_config.sh 已加入 .gitignore，不会提交）
+#
+# 获取 API Key：
+# 1. 登录 https://www.pgyer.com
+# 2. 进入 账号设置 -> API 信息：https://www.pgyer.com/account/api
+# 3. 复制 API Key 填入下方
+
+export PGYER_API_KEY="你的_api_key"

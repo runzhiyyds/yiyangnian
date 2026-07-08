@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 用于 getExternalStorageDirectory() 生成的路径 -->
+    <external-path
+        name="external_storage_root"
+        path="." />
+    <!-- 用于临时缓存目录 -->
+    <cache-path
+        name="cache"
+        path="." />
+    <!-- 应用外部专属目录 -->
+    <external-files-path
+        name="external_files"
+        path="." />
+</paths>
+
