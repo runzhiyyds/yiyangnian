@@ -136,6 +136,17 @@ class AppRouter {
         builder: (_, __) => const InventoryPurchaseEditScreen(),
       ),
       GoRoute(
+        path: '/inventory/purchase/:id',
+        builder: (context, state) {
+          final id = int.tryParse(state.pathParameters['id'] ?? '');
+          if (id == null) return const _InvalidParamRedirect(to: '/home/inventory');
+          return InventoryPurchaseEditScreen(
+            purchaseId: id,
+            initialReadOnly: true,
+          );
+        },
+      ),
+      GoRoute(
         path: '/inventory/purchase/:id/edit',
         builder: (context, state) {
           final id = int.tryParse(state.pathParameters['id'] ?? '');

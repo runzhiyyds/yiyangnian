@@ -498,6 +498,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
   bool _lastRouteCurrent = false;
   /// 从储值/消费详情返回时置为 true，避免被误判为「切换 TAB」而刷新导致滚动乱跳
   bool _returningFromDrillDown = false;
+  /// 正在从进货明细进入详情；返回后需要恢复明细 sheet。
+  bool _restoringPurchaseSheet = false;
   /// 在非当前页时收到 notifyDataChanged，延后到重新成为当前页或下拉刷新时再刷新
   bool _pendingRefreshFromNotify = false;
 
@@ -920,25 +922,45 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
                     (sum, item) => sum + item,
                   );
                   return ListTile(
-                    title: Text(purchase.code),
-                    subtitle: Text(
+                    title: Text(
                       '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}'
                       '${bigItems.isEmpty ? '' : ' · $bigItems'}'
                       '${quantity > 0 ? ' · $quantity 件' : ''}',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     ),
+                    subtitle: (purchase.remark ?? '').trim().isEmpty
+                        ? null
+                        : Text(
+                            purchase.remark!.trim(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                     trailing: Text(
                       '¥${purchase.totalAmount.toStringAsFixed(2)}',
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    onTap: () {
+                    onTap: () async {
+                      _restoringPurchaseSheet = true;
                       Navigator.pop(ctx);
+                      final changed = await this.context.push<bool>(
+                        '/inventory/purchase/${purchase.id}',
+                      );
+                      if (!mounted) return;
+                      if (changed == true) {
+                        _pendingRefreshFromNotify = false;
+                        final key = _rangeCacheKey(
+                          _analyticsRangeStart,
+                          _analyticsRangeEnd,
+                        );
+                        _summaryCache.remove(key);
+                        setState(() => _analyticsLoading = true);
+                        await _loadConsumptionAnalytics();
+                      }
+                      if (!mounted) return;
+                      _restoringPurchaseSheet = false;
                       WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (!mounted) return;
-                        setState(() => _returningFromDrillDown = true);
-                        this.context.push('/inventory/purchase/${purchase.id}/edit');
+                        if (mounted) _showPurchaseDrillDown(this.context);
                       });
                     },
                   );
@@ -949,7 +971,9 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         ),
       ),
     ).then((_) {
-      if (mounted && ModalRoute.of(this.context)?.isCurrent == true) {
+      if (!_restoringPurchaseSheet &&
+          mounted &&
+          ModalRoute.of(this.context)?.isCurrent == true) {
         _returningFromDrillDown = false;
       }
     });

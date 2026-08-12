@@ -19,9 +19,12 @@ class InventoryPurchaseEditScreen extends StatefulWidget {
   const InventoryPurchaseEditScreen({
     super.key,
     this.purchaseId,
+    this.initialReadOnly = false,
   });
 
   final int? purchaseId;
+  /// 已有记录默认可从只读浏览态进入，避免误触修改。
+  final bool initialReadOnly;
 
   @override
   State<InventoryPurchaseEditScreen> createState() =>
@@ -42,6 +45,7 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
   List<StorageBigItemOption> _bigItemOptions = [];
   List<StorageSmallItemOption> _smallItemOptions = [];
   bool _loading = false;
+  late bool _isEditing;
   String? _error;
 
   String _cacheKeyBig(BuildContext context) =>
@@ -58,6 +62,7 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
     _totalAmountController = TextEditingController(text: '0');
     _remarkController = TextEditingController();
     _smallItemDisplayController = TextEditingController(text: '请选择储值小项');
+    _isEditing = !widget.initialReadOnly || widget.purchaseId == null;
     _loadOptions();
     if (widget.purchaseId != null) {
       _loadPurchase();
@@ -436,7 +441,7 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('保存成功')),
         );
-        context.pop();
+        context.pop(true);
       }
     } catch (e) {
       if (mounted) {
@@ -450,22 +455,29 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
 
   @override
   Widget build(BuildContext context) {
-    final isEdit = widget.purchaseId != null;
+    final isExisting = widget.purchaseId != null;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(isEdit ? '编辑进货' : '添加进货'),
+        title: Text(!isExisting ? '添加进货' : (_isEditing ? '编辑进货' : '进货详情')),
         actions: [
-          TextButton(
-            onPressed: _loading ? null : _save,
-            child: _loading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('保存'),
-          ),
+          if (isExisting && !_isEditing)
+            TextButton.icon(
+              onPressed: () => setState(() => _isEditing = true),
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('编辑'),
+            )
+          else
+            TextButton(
+              onPressed: _loading ? null : _save,
+              child: _loading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('保存'),
+            ),
         ],
       ),
       body: Form(
@@ -473,6 +485,17 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            if (isExisting && !_isEditing) ...[
+              Card(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: const ListTile(
+                  leading: Icon(Icons.visibility_outlined),
+                  title: Text('当前为浏览态'),
+                  subtitle: Text('内容不可修改；如需调整，请点击右上角“编辑”'),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
             if (_error != null) ...[
               Text(_error!, style: const TextStyle(color: Colors.red)),
               const SizedBox(height: 16),
@@ -493,7 +516,7 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                         '${_purchaseDate.year}-${_purchaseDate.month.toString().padLeft(2, '0')}-${_purchaseDate.day.toString().padLeft(2, '0')}',
                       ),
                       trailing: const Icon(Icons.calendar_today),
-                      onTap: () async {
+                      onTap: !_isEditing ? null : () async {
                         final d = await showDatePicker(
                           context: context,
                           initialDate: _purchaseDate,
@@ -507,6 +530,7 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                     const SizedBox(height: 16),
                     TextFormField(
                       controller: _totalAmountController,
+                      enabled: _isEditing,
                       decoration: const InputDecoration(
                         labelText: '总金额（元）',
                         hintText: '可选',
@@ -519,6 +543,7 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                     const SizedBox(height: 16),
                     TextFormField(
                       controller: _remarkController,
+                      enabled: _isEditing,
                       decoration: const InputDecoration(
                         labelText: '备注',
                         hintText: '可选',
@@ -562,7 +587,7 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                                     overflow: TextOverflow.ellipsis),
                               ))
                           .toList(),
-      onChanged: (v) {
+      onChanged: !_isEditing ? null : (v) {
         if (v != null) {
           setState(() {
             _bigItemName = v;
@@ -575,14 +600,15 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
         }
       },
                     ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: _loading ? null : _addBigItem,
-                        icon: const Icon(Icons.add, size: 18),
-                        label: const Text('新增大项'),
+                    if (_isEditing)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _loading ? null : _addBigItem,
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('新增大项'),
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 16),
                     TextFormField(
                       readOnly: true,
@@ -592,16 +618,18 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                         isDense: true,
                       ),
                       controller: _smallItemDisplayController,
-                      onTap: _loading ? null : _pickSmallItem,
+                      enabled: _isEditing,
+                      onTap: _loading || !_isEditing ? null : _pickSmallItem,
                     ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: _loading ? null : _addSmallItem,
-                        icon: const Icon(Icons.add, size: 18),
-                        label: const Text('新增小项'),
+                    if (_isEditing)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _loading ? null : _addSmallItem,
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('新增小项'),
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 16),
                     Row(
                       children: [
@@ -610,6 +638,7 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                         const SizedBox(width: 12),
                         QuantityStepper(
                           value: _quantity,
+                          enabled: _isEditing,
                           onChanged: (v) => setState(() => _quantity = v),
                         ),
                       ],
