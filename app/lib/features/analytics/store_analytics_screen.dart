@@ -16,6 +16,8 @@ import '../consumption/consumption_model.dart';
 import '../consumption/consumption_repository.dart';
 import '../customer/customer_model.dart';
 import '../customer/customer_repository.dart';
+import '../inventory/inventory_models.dart';
+import '../inventory/inventory_purchase_repository.dart';
 import '../storage/storage_model.dart';
 import '../storage/storage_repository.dart';
 import '../storage_options/storage_big_item_repository.dart';
@@ -52,6 +54,8 @@ class _CachedSummary {
 class _PeriodSummaryData {
   final _CachedSummary all;
   final Map<String, _CachedSummary> byBigItem;
+  /// 本周期全部进货单。进货金额按整单记录，不能可靠拆分到储值大项。
+  final List<InventoryPurchaseRecordModel> purchases;
   /// 消费记录对应的储值，用于下钻展示客户名
   final Map<int, StorageRecordModel> consumptionStorageMap;
   /// 小项 ID 到名称，用于下钻展示
@@ -59,6 +63,7 @@ class _PeriodSummaryData {
   _PeriodSummaryData({
     required this.all,
     required this.byBigItem,
+    this.purchases = const [],
     this.consumptionStorageMap = const {},
     this.consumptionSmallNames = const {},
   });
@@ -114,6 +119,7 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
   final customerRepo = context.read<CustomerRepository>();
   final storageRepo = context.read<StorageRepository>();
   final consumptionRepo = context.read<ConsumptionRepository>();
+  final purchaseRepo = context.read<InventoryPurchaseRepository>();
   final bigItemRepo = context.read<StorageBigItemRepository>();
   final smallItemRepo = context.read<StorageSmallItemRepository>();
   final cache = context.read<DataCache>();
@@ -165,8 +171,13 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
     var storagesInRangeWeek =
         await storageRepo.getByStorageDateRange(weekStart, weekEnd);
     storagesInRangeWeek = DemoMode.filterStorages(email, storagesInRangeWeek);
+    var purchasesInRangeWeek =
+        await purchaseRepo.getByDateRange(weekStart, weekEnd);
+    purchasesInRangeWeek =
+        DemoMode.filterInventoryPurchases(email, purchasesInRangeWeek);
     final periodSummary = _buildPeriodSummaryFromConsumptions(
-      weekStart, weekEnd, consumptionsWeek, storageMap, smallIdToName, storagesInRangeWeek,
+      weekStart, weekEnd, consumptionsWeek, storageMap, smallIdToName,
+      storagesInRangeWeek, purchasesInRangeWeek,
     );
     final periodSummaryCacheKey = _rangeCacheKey(weekStart, weekEnd);
 
@@ -250,6 +261,7 @@ _PeriodSummaryData _buildPeriodSummaryFromConsumptions(
   Map<int, StorageRecordModel> storageMap,
   Map<int, String> smallIdToName,
   List<StorageRecordModel> storagesInRange,
+  List<InventoryPurchaseRecordModel> purchasesInRange,
 ) {
   final double totalAll = storagesInRange.fold<double>(0, (sum, s) => sum + s.amount);
   final bigCountsAll = <String, int>{};
@@ -391,6 +403,7 @@ _PeriodSummaryData _buildPeriodSummaryFromConsumptions(
   return _PeriodSummaryData(
     all: summaryAll,
     byBigItem: byBigItem,
+    purchases: purchasesInRange,
     consumptionStorageMap: storageMap,
     consumptionSmallNames: smallIdToName,
   );
@@ -455,6 +468,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
   List<String> _allBigItemNamesFromRepo = [];
   double _consumptionTotal = 0;
   int _consumptionCount = 0;
+  double _purchaseTotal = 0;
+  List<InventoryPurchaseRecordModel> _purchaseRecords = [];
   Map<String, int> _bigItemCounts = {};
   Map<String, int> _smallItemCounts = {};
   bool _analyticsLoading = false;
@@ -557,6 +572,11 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         : (data.byBigItem[_selectedBigItemFilter] ?? _CachedSummary(total: 0, count: 0, bigCounts: {}, smallCounts: {}));
     _consumptionTotal = summary.total;
     _consumptionCount = summary.count;
+    _purchaseRecords = List.from(data.purchases);
+    _purchaseTotal = _purchaseRecords.fold<double>(
+      0,
+      (sum, purchase) => sum + purchase.totalAmount,
+    );
     _bigItemCounts = Map.from(summary.bigCounts);
     _smallItemCounts = Map.from(summary.smallCounts);
     _contributingStorages = summary.contributingStorages;
@@ -585,6 +605,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     final consumptionRepo = context.read<ConsumptionRepository>();
     final storageRepo = context.read<StorageRepository>();
     final smallItemRepo = context.read<StorageSmallItemRepository>();
+    final purchaseRepo = context.read<InventoryPurchaseRepository>();
 
     try {
       var consumptions = await consumptionRepo.getByDateRange(start, end);
@@ -607,6 +628,9 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       // 储值金额按「储值时间在本周期内」的储值记录统计
       var storagesInRange = await storageRepo.getByStorageDateRange(start, end);
       storagesInRange = DemoMode.filterStorages(email, storagesInRange);
+      var purchasesInRange = await purchaseRepo.getByDateRange(start, end);
+      purchasesInRange =
+          DemoMode.filterInventoryPurchases(email, purchasesInRange);
       final double totalAll = storagesInRange.fold<double>(0, (sum, s) => sum + s.amount);
 
       final bigCountsAll = <String, int>{};
@@ -753,6 +777,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         final periodData = _PeriodSummaryData(
           all: summaryAll,
           byBigItem: byBigItem,
+          purchases: purchasesInRange,
           consumptionStorageMap: storageMap,
           consumptionSmallNames: smallIdToName,
         );
@@ -767,6 +792,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         setState(() {
           _consumptionTotal = 0;
           _consumptionCount = 0;
+          _purchaseTotal = 0;
+          _purchaseRecords = [];
           _bigItemCounts = {};
           _smallItemCounts = {};
           _contributingStorages = [];
@@ -844,6 +871,85 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     ).then((_) {
       // 仅当用户关闭 sheet 未导航时重置；若已 push 到详情页，保持 true 以便返回时不刷新
       if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+        _returningFromDrillDown = false;
+      }
+    });
+  }
+
+  void _showPurchaseDrillDown(BuildContext context) {
+    if (_purchaseRecords.isEmpty) return;
+    _returningFromDrillDown = true;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        minChildSize: 0.25,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (_, scrollController) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text('进货金额明细', style: Theme.of(context).textTheme.titleLarge),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                '共 ${_purchaseRecords.length} 笔进货 · 合计 ¥${_purchaseTotal.toStringAsFixed(2)}',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView.separated(
+                controller: scrollController,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                itemCount: _purchaseRecords.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, i) {
+                  final purchase = _purchaseRecords[i];
+                  final date = purchase.purchaseDate;
+                  final bigItems = purchase.storageBigItems
+                      .where((name) => name.isNotEmpty)
+                      .toSet()
+                      .join('、');
+                  final quantity = purchase.quantities.fold<int>(
+                    0,
+                    (sum, item) => sum + item,
+                  );
+                  return ListTile(
+                    title: Text(purchase.code),
+                    subtitle: Text(
+                      '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}'
+                      '${bigItems.isEmpty ? '' : ' · $bigItems'}'
+                      '${quantity > 0 ? ' · $quantity 件' : ''}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                    trailing: Text(
+                      '¥${purchase.totalAmount.toStringAsFixed(2)}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (!mounted) return;
+                        setState(() => _returningFromDrillDown = true);
+                        this.context.push('/inventory/purchase/${purchase.id}/edit');
+                      });
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    ).then((_) {
+      if (mounted && ModalRoute.of(this.context)?.isCurrent == true) {
         _returningFromDrillDown = false;
       }
     });
@@ -1463,7 +1569,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
               ],
             ),
             const SizedBox(height: 16),
-            // 第三级：具体金额（储值金额汇总 + 大项/小项消费次数）
+            // 第三级：经营金额（储值、进货）+ 大项/小项消费次数
             Card(
               child: InkWell(
                 onTap: _analyticsLoading || _contributingStorages.isEmpty
@@ -1516,6 +1622,58 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
                               fontSize: 12,
                               color: Colors.grey[600],
                             ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              child: InkWell(
+                onTap: _analyticsLoading || _purchaseRecords.isEmpty
+                    ? null
+                    : () => _showPurchaseDrillDown(context),
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text('总进货', style: Theme.of(context).textTheme.titleMedium),
+                          if (!_analyticsLoading && _purchaseRecords.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8),
+                              child: Icon(
+                                Icons.arrow_forward_ios,
+                                size: 14,
+                                color: Theme.of(context).colorScheme.secondary,
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      _analyticsLoading
+                          ? const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 16),
+                              child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))),
+                            )
+                          : Text(
+                              '¥${_purchaseTotal.toStringAsFixed(2)}',
+                              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: Theme.of(context).colorScheme.secondary,
+                                  ),
+                            ),
+                      if (!_analyticsLoading)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            '${_purchaseRecords.length} 笔进货 · 按进货日期统计；补充入库无金额不计入，不受储值大项筛选影响',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                           ),
                         ),
                     ],

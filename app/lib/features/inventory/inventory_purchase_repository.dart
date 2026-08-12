@@ -24,6 +24,29 @@ class InventoryPurchaseRepository {
         .toList();
   }
 
+  /// 按进货日期（含首尾日期）查询进货单，供周期经营分析使用。
+  Future<List<InventoryPurchaseRecordModel>> getByDateRange(
+    DateTime start,
+    DateTime end,
+  ) async {
+    String dateOnly(DateTime date) =>
+        '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+
+    final res = await _client
+        .from('inventory_purchase_records')
+        .select()
+        .gte('purchase_date', dateOnly(start))
+        .lte('purchase_date', dateOnly(end))
+        .order('purchase_date', ascending: false)
+        .order('id', ascending: false);
+    return (res as List)
+        .map((e) => InventoryPurchaseRecordModel.fromJson(
+            Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
   Future<InventoryPurchaseRecordModel?> getById(int id) async {
     final res = await _client
         .from('inventory_purchase_records')
