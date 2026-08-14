@@ -1,6 +1,5 @@
-import 'package:flutter/material.dart';
-import 'package:nested/nested.dart';
 import 'package:provider/provider.dart';
+import 'package:provider/single_child_widget.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'data_cache.dart';
@@ -17,10 +16,13 @@ import '../features/inventory/inventory_supp_in_repository.dart';
 import '../features/tree/tree_data_provider.dart';
 
 /// 构建应用根 [Provider] 列表，集中依赖注册，便于 main 与测试复用。
-List<SingleChildWidget> buildAppProviders(DataCache dataCache, SupabaseClient? client) {
+List<SingleChildWidget> buildAppProviders(
+  DataCache dataCache,
+  SupabaseClient? client,
+) {
   return [
     Provider<DataCache>.value(value: dataCache),
-    ChangeNotifierProvider(create: (_) => AuthService()),
+    ChangeNotifierProvider(create: (_) => AuthService(client)),
     ChangeNotifierProvider(create: (_) => DataRefreshNotifier(dataCache)),
     if (client != null) ...[
       Provider(create: (_) => CustomerRepository(client)),
