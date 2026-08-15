@@ -10,6 +10,13 @@ class InventoryPurchaseRecordModel {
   final String? remark;
   final DateTime? createdAt;
 
+  /// 三组历史数组必须一一对应；不对齐时禁止编辑，避免静默丢失商品。
+  bool get hasAlignedItems =>
+      storageBigItems.length == storageSmallItemIds.length &&
+      storageSmallItemIds.length == quantities.length;
+
+  int get itemCount => hasAlignedItems ? storageSmallItemIds.length : 0;
+
   InventoryPurchaseRecordModel({
     required this.id,
     required this.code,
@@ -89,6 +96,7 @@ class InventoryConsumptionRecordModel {
   final int storageSmallItemId;
   final int quantity;
   final String? remark;
+
   /// 由新建储值自动出库时关联的储值记录 ID（需 DB 迁移列 source_storage_record_id）
   final int? sourceStorageRecordId;
   final DateTime? createdAt;
@@ -129,7 +137,8 @@ class InventoryConsumptionRecordModel {
       'storage_small_item_id': storageSmallItemId,
       'quantity': quantity,
       if (remark != null && remark!.isNotEmpty) 'remark': remark,
-      if (sourceStorageRecordId != null) 'source_storage_record_id': sourceStorageRecordId,
+      if (sourceStorageRecordId != null)
+        'source_storage_record_id': sourceStorageRecordId,
     };
   }
 }

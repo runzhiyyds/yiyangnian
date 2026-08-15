@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -7,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/config.dart';
 import '../../core/data_refresh.dart';
 import '../../core/demo_credentials.dart';
+import '../../core/push_notification_service.dart';
 import '../tree/tree_data_provider.dart';
 import 'auth_service.dart';
 
@@ -57,15 +60,16 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       debugPrint('[颐养年] 连接测试失败: $e');
       if (mounted) {
-        final isHostLookup = e.toString().contains('Failed host lookup') ||
+        final isHostLookup =
+            e.toString().contains('Failed host lookup') ||
             e.toString().contains('No address associated with hostname');
         setState(() {
           _error = isHostLookup
               ? '无法解析服务器地址（DNS 失败）。\n'
-                '请到 Supabase 控制台确认「颐养年」项目是否已暂停（免费版 7 天无活动会暂停），若已暂停请点击「Restore project」恢复。\n'
-                '若未暂停，可尝试换网络或换时段重试。'
+                    '请到 Supabase 控制台确认「颐养年」项目是否已暂停（免费版 7 天无活动会暂停），若已暂停请点击「Restore project」恢复。\n'
+                    '若未暂停，可尝试换网络或换时段重试。'
               : '连接失败: ${e.toString().replaceAll('Exception:', '').trim()}。'
-                  '请检查网络、Supabase 项目是否已暂停（免费版 7 天无活动会暂停）';
+                    '请检查网络、Supabase 项目是否已暂停（免费版 7 天无活动会暂停）';
           _connectionOk = false;
         });
       }
@@ -80,30 +84,35 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     debugPrint('[颐养年] 开始登录...');
     try {
-      await context.read<AuthService>().signIn(
-            _emailController.text.trim(),
-            _passwordController.text,
-          ).timeout(
+      await context
+          .read<AuthService>()
+          .signIn(_emailController.text.trim(), _passwordController.text)
+          .timeout(
             const Duration(seconds: 15),
-            onTimeout: () => throw Exception('登录超时(15秒)。'
-                'Supabase 免费版项目若 7 天无活动会暂停，首次请求需等待唤醒'),
+            onTimeout: () => throw Exception(
+              '登录超时(15秒)。'
+              'Supabase 免费版项目若 7 天无活动会暂停，首次请求需等待唤醒',
+            ),
           );
       debugPrint('[颐养年] 登录成功');
       if (!mounted) return;
       context.read<DataRefreshNotifier>().notifyDataChanged();
       context.read<TreeDataProvider>().reset();
-      context.go('/home/tree');
+      unawaited(PushNotificationService.syncCurrentDevice());
+      context.go('/home/inventory');
     } catch (e) {
       debugPrint('[颐养年] 登录失败: $e');
       if (mounted) {
-        String msg = e.toString()
+        String msg = e
+            .toString()
             .replaceAll('Exception:', '')
             .replaceAll('AuthException:', '')
             .trim();
         if (msg.contains('Invalid login credentials')) {
           msg = '邮箱或密码错误';
         } else if (msg.contains('Email not confirmed')) {
-          msg = '账号邮箱未确认。本应用无需邮件验证，请在 Supabase 关闭 '
+          msg =
+              '账号邮箱未确认。本应用无需邮件验证，请在 Supabase 关闭 '
               'Authentication → Email 的「Confirm email」后，'
               '重新执行体验账号 SQL（见 docs/体验账号与演示数据.md）';
         } else if (msg.contains('Rate limit')) {
@@ -142,7 +151,11 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(Icons.warning_amber_rounded, size: 64, color: Colors.orange),
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  size: 64,
+                  color: Colors.orange,
+                ),
                 const SizedBox(height: 16),
                 const Text(
                   '未配置 Supabase',
@@ -174,25 +187,21 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   const Text(
                     '颐养年店铺管理',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
                   Text(
                     '客户 · 储值 · 消费管理',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
+                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 48),
                   Card(
                     elevation: 0,
-                    color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.35),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.primaryContainer.withValues(alpha: 0.35),
                     child: Padding(
                       padding: const EdgeInsets.all(14),
                       child: Column(
@@ -200,14 +209,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         children: [
                           Text(
                             '体验账号',
-                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w600),
                           ),
                           const SizedBox(height: 6),
                           Text(
                             '邮箱：${DemoCredentials.email}\n密码：${DemoCredentials.password}',
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(height: 1.4),
+                            style: Theme.of(
+                              context,
+                            ).textTheme.bodySmall?.copyWith(height: 1.4),
                           ),
                           const SizedBox(height: 10),
                           OutlinedButton(

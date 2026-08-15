@@ -18,6 +18,23 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 class PushNotificationService {
   static final FirebaseMessaging _messaging = FirebaseMessaging.instance;
 
+  static Future<void> syncCurrentDevice() => _refreshAndUploadToken();
+
+  static Future<void> releaseCurrentDevice() async {
+    final client = Supabase.instance.client;
+    if (client.auth.currentUser == null) return;
+    try {
+      final token = await _messaging.getToken();
+      if (token == null) return;
+      await client.rpc(
+        'release_push_device',
+        params: {'p_device_token': token},
+      );
+    } catch (e) {
+      debugPrint('Failed to release push token: $e');
+    }
+  }
+
   static Future<void> initialize() async {
     // Web 未配置 FirebaseOptions 时无法初始化；本地调试 run_web 不走 FCM
     if (kIsWeb) {
@@ -28,7 +45,9 @@ class PushNotificationService {
     try {
       await Firebase.initializeApp();
     } catch (e) {
-      debugPrint('PushNotificationService: Firebase.initializeApp failed (may already init): $e');
+      debugPrint(
+        'PushNotificationService: Firebase.initializeApp failed (may already init): $e',
+      );
     }
 
     // 注册后台消息处理
@@ -38,7 +57,9 @@ class PushNotificationService {
     try {
       await _messaging.requestPermission();
     } catch (e, stack) {
-      debugPrint('Push permission request failed, will continue without push: $e\n$stack');
+      debugPrint(
+        'Push permission request failed, will continue without push: $e\n$stack',
+      );
     }
 
     // 获取并上报当前 Token（在不支持 GMS 的设备上会失败，这里做降级处理）
@@ -74,19 +95,21 @@ class PushNotificationService {
       }
     } catch (e, stack) {
       // 例如在没有 Google Play 服务的华为设备上：MISSING_INSTANCEID_SERVICE
-      debugPrint('FCM getToken failed, disable push on this device: $e\n$stack');
+      debugPrint(
+        'FCM getToken failed, disable push on this device: $e\n$stack',
+      );
     }
   }
 
   static Future<void> _uploadToken(String token) async {
     final client = Supabase.instance.client;
+    final ownerId = client.auth.currentUser?.id;
+    if (ownerId == null) return;
     try {
-      // 当前应用没有用户体系，先按设备维度存储，未来可加入 user_id
-      await client.from('push_devices').upsert({
-        'device_token': token,
-        'platform': 'android',
-        'is_active': true,
-      });
+      await client.rpc(
+        'claim_push_device',
+        params: {'p_device_token': token, 'p_platform': 'android'},
+      );
     } catch (e) {
       debugPrint('Failed to upload push token: $e');
     }
@@ -113,4 +136,3 @@ class PushNotificationService {
     }
   }
 }
-

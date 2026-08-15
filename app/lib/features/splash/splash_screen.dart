@@ -40,7 +40,7 @@ class _SplashScreenState extends State<SplashScreen> {
     if (_hasNavigated || !mounted) return;
     _hasNavigated = true;
     _safetyTimer?.cancel();
-    context.go('/home/tree');
+    context.go('/home/inventory');
   }
 
   Future<void> _init() async {
@@ -71,10 +71,12 @@ class _SplashScreenState extends State<SplashScreen> {
         final treeData = context.read<TreeDataProvider>();
         // 预加载不宜过久阻塞启动页；树数据已改为少量请求，多数情况几秒内完成
         await Future.wait([
-          treeData.load(context).timeout(
-            const Duration(seconds: 18),
-            onTimeout: () => throw TimeoutException('预加载超时'),
-          ),
+          treeData
+              .load(context)
+              .timeout(
+                const Duration(seconds: 18),
+                onTimeout: () => throw TimeoutException('预加载超时'),
+              ),
           preloadStoreAnalyticsData(context).timeout(
             const Duration(seconds: 18),
             onTimeout: () => throw TimeoutException('分析预加载超时'),
@@ -116,7 +118,8 @@ class _SplashScreenState extends State<SplashScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (updateInfo.releaseNote != null && updateInfo.releaseNote!.isNotEmpty)
+              if (updateInfo.releaseNote != null &&
+                  updateInfo.releaseNote!.isNotEmpty)
                 Text(updateInfo.releaseNote!),
               const SizedBox(height: 12),
               const Text('是否立即更新？'),
@@ -136,7 +139,8 @@ class _SplashScreenState extends State<SplashScreen> {
       ),
     );
     if (open == true && mounted) {
-      final apkUrl = updateInfo.apkUrl ??
+      final apkUrl =
+          updateInfo.apkUrl ??
           updateInfo.androidUrl ??
           updateInfo.downloadPageUrl;
       if (apkUrl == null || apkUrl.isEmpty) {
@@ -239,10 +243,7 @@ class _SplashScreenState extends State<SplashScreen> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFFF5F9F7),
-              Color(0xFFE8F0ED),
-            ],
+            colors: [Color(0xFFF5F9F7), Color(0xFFE8F0ED)],
           ),
         ),
         child: SafeArea(
@@ -254,10 +255,10 @@ class _SplashScreenState extends State<SplashScreen> {
                 '颐养年店铺管理',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      color: AppTheme.primaryDark,
-                      fontWeight: FontWeight.bold,
-                      height: 1.3,
-                    ),
+                  color: AppTheme.primaryDark,
+                  fontWeight: FontWeight.bold,
+                  height: 1.3,
+                ),
               ),
               const SizedBox(height: 12),
               Text(
@@ -266,10 +267,10 @@ class _SplashScreenState extends State<SplashScreen> {
                 maxLines: 2,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: AppTheme.primary,
-                      fontWeight: FontWeight.w500,
-                      height: 1.4,
-                    ),
+                  color: AppTheme.primary,
+                  fontWeight: FontWeight.w500,
+                  height: 1.4,
+                ),
               ),
               const Spacer(),
               if (_notConfigured)

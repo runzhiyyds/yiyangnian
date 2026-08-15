@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/push_notification_service.dart';
+
 class AuthService extends ChangeNotifier {
   AuthService([this._client]) {
     final client = _client;
@@ -59,6 +61,7 @@ class AuthService extends ChangeNotifier {
   Future<void> signOut() async {
     final client = _client;
     if (client != null) {
+      await PushNotificationService.releaseCurrentDevice();
       await client.auth.signOut();
     }
     _user = null;

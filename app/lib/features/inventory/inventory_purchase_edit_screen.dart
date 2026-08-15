@@ -23,6 +23,7 @@ class InventoryPurchaseEditScreen extends StatefulWidget {
   });
 
   final int? purchaseId;
+
   /// 已有记录默认可从只读浏览态进入，避免误触修改。
   final bool initialReadOnly;
 
@@ -31,7 +32,8 @@ class InventoryPurchaseEditScreen extends StatefulWidget {
       _InventoryPurchaseEditScreenState();
 }
 
-class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScreen> {
+class _InventoryPurchaseEditScreenState
+    extends State<InventoryPurchaseEditScreen> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _totalAmountController;
   late TextEditingController _remarkController;
@@ -44,17 +46,22 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
   String _existingCode = '';
   List<StorageBigItemOption> _bigItemOptions = [];
   List<StorageSmallItemOption> _smallItemOptions = [];
+  final List<_PurchaseLineDraft> _lines = [];
+  int _activeLineIndex = 0;
+  bool _hasLineDataMismatch = false;
   bool _loading = false;
   late bool _isEditing;
   String? _error;
 
   String _cacheKeyBig(BuildContext context) =>
       DemoMode.inventoryBigOptionsCacheKey(
-          context.read<AuthService>().user?.email);
+        context.read<AuthService>().user?.email,
+      );
 
   String _cacheKeySmall(BuildContext context) =>
       DemoMode.inventorySmallOptionsCacheKey(
-          context.read<AuthService>().user?.email);
+        context.read<AuthService>().user?.email,
+      );
 
   @override
   void initState() {
@@ -99,10 +106,93 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
     return _smallItemOptions.where((s) => s.storageBigItemId == bigId).toList();
   }
 
+  String _smallItemName(int id) {
+    for (final option in _smallItemOptions) {
+      if (option.id == id) return option.name;
+    }
+    return '小项 #$id';
+  }
+
+  void _writeActiveLineFromEditor() {
+    if (_activeLineIndex < 0 || _activeLineIndex >= _lines.length) return;
+    _lines[_activeLineIndex] = _PurchaseLineDraft(
+      bigItemName: _bigItemName,
+      smallItemId: _smallItemId,
+      quantity: _quantity,
+    );
+  }
+
+  void _loadActiveLineIntoEditor() {
+    if (_lines.isEmpty) return;
+    _activeLineIndex = _activeLineIndex.clamp(0, _lines.length - 1);
+    final line = _lines[_activeLineIndex];
+    _bigItemName = line.bigItemName;
+    _smallItemId = line.smallItemId;
+    _quantity = line.quantity;
+    _updateSmallItemDisplay();
+  }
+
+  void _ensureInitialLine() {
+    if (_lines.isNotEmpty || _bigItemOptions.isEmpty) return;
+    final bigName = _bigItemOptions.first.name;
+    final bigId = _bigItemOptions.first.id;
+    final small = _smallItemOptions.where((o) => o.storageBigItemId == bigId);
+    _lines.add(
+      _PurchaseLineDraft(
+        bigItemName: bigName,
+        smallItemId: small.isEmpty ? 0 : small.first.id,
+        quantity: 1,
+      ),
+    );
+    _activeLineIndex = 0;
+    _loadActiveLineIntoEditor();
+  }
+
+  void _selectLine(int index) {
+    _writeActiveLineFromEditor();
+    setState(() {
+      _activeLineIndex = index;
+      _loadActiveLineIntoEditor();
+    });
+  }
+
+  void _addLine() {
+    _writeActiveLineFromEditor();
+    final bigName = _bigItemOptions.isEmpty ? '' : _bigItemOptions.first.name;
+    final bigId = _bigItemOptions.isEmpty ? null : _bigItemOptions.first.id;
+    final small = _smallItemOptions.where((o) => o.storageBigItemId == bigId);
+    setState(() {
+      _lines.add(
+        _PurchaseLineDraft(
+          bigItemName: bigName,
+          smallItemId: small.isEmpty ? 0 : small.first.id,
+          quantity: 1,
+        ),
+      );
+      _activeLineIndex = _lines.length - 1;
+      _loadActiveLineIntoEditor();
+    });
+  }
+
+  void _removeLine(int index) {
+    if (_lines.length <= 1) return;
+    _writeActiveLineFromEditor();
+    setState(() {
+      _lines.removeAt(index);
+      if (_activeLineIndex >= _lines.length) {
+        _activeLineIndex = _lines.length - 1;
+      } else if (index < _activeLineIndex) {
+        _activeLineIndex -= 1;
+      }
+      _loadActiveLineIntoEditor();
+    });
+  }
+
   Future<void> _loadOptions() async {
     final cache = context.read<DataCache>();
     final keyBig = _cacheKeyBig(context);
     final keySmall = _cacheKeySmall(context);
+    final email = context.read<AuthService>().user?.email;
     var big = cache.get<List<StorageBigItemOption>>(keyBig);
     var small = cache.get<List<StorageSmallItemOption>>(keySmall);
     if (big == null || small == null) {
@@ -110,7 +200,6 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
       final smallRepo = context.read<StorageSmallItemRepository>();
       final allBig = await retryOnFailure(() => bigRepo.getAll());
       final allSmall = await retryOnFailure(() => smallRepo.getAll());
-      final email = context.read<AuthService>().user?.email;
       big = allBig;
       small = DemoMode.filterSmallItemOptions(email, allSmall);
       if (mounted) {
@@ -119,8 +208,8 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
       }
     }
     if (mounted) {
-      final bigList = big ?? [];
-      final smallList = small ?? [];
+      final bigList = big;
+      final smallList = small;
       setState(() {
         _bigItemOptions = bigList;
         _smallItemOptions = smallList;
@@ -135,12 +224,16 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
           }
         }
         if (bigId == null && bigList.isNotEmpty) bigId = bigList.first.id;
-        final underBig = smallList.where((s) => s.storageBigItemId == bigId).toList();
+        final underBig = smallList
+            .where((s) => s.storageBigItemId == bigId)
+            .toList();
         if (_smallItemId == 0 && underBig.isNotEmpty) {
           _smallItemId = underBig.first.id;
-        } else if (_smallItemId != 0 && !underBig.any((s) => s.id == _smallItemId)) {
+        } else if (_smallItemId != 0 &&
+            !underBig.any((s) => s.id == _smallItemId)) {
           _smallItemId = underBig.isNotEmpty ? underBig.first.id : 0;
         }
+        _ensureInitialLine();
       });
       _updateSmallItemDisplay();
     }
@@ -180,11 +273,22 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
       final cache = context.read<DataCache>();
       setState(() {
         if (_bigItemOptions.every((o) => o.id != opt.id)) {
-          _bigItemOptions = [..._bigItemOptions, opt]..sort((a, b) => a.name.compareTo(b.name));
+          _bigItemOptions = [..._bigItemOptions, opt]
+            ..sort((a, b) => a.name.compareTo(b.name));
         }
         _bigItemName = opt.name;
+        final underBig = _smallItemsUnderBigItem;
+        if (!underBig.any((item) => item.id == _smallItemId)) {
+          _smallItemId = underBig.isEmpty ? 0 : underBig.first.id;
+        }
+        _updateSmallItemDisplay();
+        _writeActiveLineFromEditor();
       });
-      cache.set(_cacheKeyBig(context), _bigItemOptions, ttl: const Duration(hours: 1));
+      cache.set(
+        _cacheKeyBig(context),
+        _bigItemOptions,
+        ttl: const Duration(hours: 1),
+      );
       // 让储值编辑等其它页面的下拉选项也能刷新
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
     } catch (e) {
@@ -227,17 +331,25 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
     try {
       final repo = context.read<StorageSmallItemRepository>();
       final bigId = _getBigItemId();
-      final opt = await retryOnFailure(() => repo.getOrCreate(name, storageBigItemId: bigId));
+      final opt = await retryOnFailure(
+        () => repo.getOrCreate(name, storageBigItemId: bigId),
+      );
       if (!mounted) return null;
       final cache = context.read<DataCache>();
       setState(() {
         if (_smallItemOptions.every((o) => o.id != opt.id)) {
-          _smallItemOptions = [..._smallItemOptions, opt]..sort((a, b) => a.name.compareTo(b.name));
+          _smallItemOptions = [..._smallItemOptions, opt]
+            ..sort((a, b) => a.name.compareTo(b.name));
         }
         _smallItemId = opt.id;
         _updateSmallItemDisplay();
+        _writeActiveLineFromEditor();
       });
-      cache.set(_cacheKeySmall(context), _smallItemOptions, ttl: const Duration(hours: 1));
+      cache.set(
+        _cacheKeySmall(context),
+        _smallItemOptions,
+        ttl: const Duration(hours: 1),
+      );
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
       return opt.id;
     } catch (e) {
@@ -252,18 +364,18 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
   Future<void> _addSmallItem() async {
     final result = await _addSmallItemFromPicker();
     if (result != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已新增小项')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已新增小项')));
     }
   }
 
   Future<void> _pickSmallItem() async {
     if (_bigItemOptions.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先新增大项')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先新增大项')));
       return;
     }
     final currentId = _smallItemId;
@@ -312,9 +424,13 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                               filtered = List.of(optionsUnderBig);
                             } else {
                               filtered = optionsUnderBig
-                                  .where((o) =>
-                                      o.name.contains(q) ||
-                                      o.name.toLowerCase().contains(q.toLowerCase()))
+                                  .where(
+                                    (o) =>
+                                        o.name.contains(q) ||
+                                        o.name.toLowerCase().contains(
+                                          q.toLowerCase(),
+                                        ),
+                                  )
                                   .toList();
                             }
                           });
@@ -369,6 +485,7 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
       setState(() {
         _smallItemId = result;
         _updateSmallItemDisplay();
+        _writeActiveLineFromEditor();
       });
     }
   }
@@ -382,29 +499,47 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
         _purchaseDate = p.purchaseDate;
         _totalAmountController.text = p.totalAmount.toStringAsFixed(0);
         _remarkController.text = p.remark ?? '';
-        if (p.storageSmallItemIds.isNotEmpty &&
-            p.storageBigItems.isNotEmpty &&
-            p.quantities.isNotEmpty) {
-          _bigItemName = p.storageBigItems.first;
-          _smallItemId = p.storageSmallItemIds.first;
-          _quantity = p.quantities.first;
+        _hasLineDataMismatch = !p.hasAlignedItems;
+        _lines
+          ..clear()
+          ..addAll(
+            List.generate(
+              p.itemCount,
+              (index) => _PurchaseLineDraft(
+                bigItemName: p.storageBigItems[index],
+                smallItemId: p.storageSmallItemIds[index],
+                quantity: p.quantities[index],
+              ),
+            ),
+          );
+        if (_lines.isNotEmpty) {
+          _activeLineIndex = 0;
+          _loadActiveLineIntoEditor();
+        } else if (!_hasLineDataMismatch) {
+          _ensureInitialLine();
         }
       });
-      _updateSmallItemDisplay();
     }
   }
 
   Future<void> _save() async {
-    if (_smallItemId <= 0) {
+    if (_hasLineDataMismatch) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请选择储值小项')),
+        const SnackBar(content: Text('该历史记录的商品数据不完整，为避免丢失内容，暂不允许保存')),
       );
       return;
     }
-    if (_quantity <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请输入有效数量（>0）')),
-      );
+    _writeActiveLineFromEditor();
+    if (_lines.isEmpty || _lines.any((line) => line.smallItemId <= 0)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请为每条进货明细选择小项')));
+      return;
+    }
+    if (_lines.any((line) => line.quantity <= 0)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('每条进货明细的数量都必须大于 0')));
       return;
     }
 
@@ -421,9 +556,9 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
         id: widget.purchaseId ?? 0,
         code: widget.purchaseId != null ? _existingCode : '',
         purchaseDate: _purchaseDate,
-        storageBigItems: [_bigItemName],
-        storageSmallItemIds: [_smallItemId],
-        quantities: [_quantity],
+        storageBigItems: _lines.map((line) => line.bigItemName).toList(),
+        storageSmallItemIds: _lines.map((line) => line.smallItemId).toList(),
+        quantities: _lines.map((line) => line.quantity).toList(),
         totalAmount: totalAmount,
         remark: _remarkController.text.trim().isEmpty
             ? null
@@ -438,9 +573,9 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
 
       if (mounted) {
         context.read<DataRefreshNotifier>().invalidateInventory();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('保存成功')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('保存成功')));
         context.pop(true);
       }
     } catch (e) {
@@ -463,7 +598,9 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
         actions: [
           if (isExisting && !_isEditing)
             TextButton.icon(
-              onPressed: () => setState(() => _isEditing = true),
+              onPressed: _hasLineDataMismatch
+                  ? null
+                  : () => setState(() => _isEditing = true),
               icon: const Icon(Icons.edit_outlined, size: 18),
               label: const Text('编辑'),
             )
@@ -500,14 +637,27 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
               Text(_error!, style: const TextStyle(color: Colors.red)),
               const SizedBox(height: 16),
             ],
+            if (_hasLineDataMismatch) ...[
+              Card(
+                color: Theme.of(context).colorScheme.errorContainer,
+                child: const ListTile(
+                  leading: Icon(Icons.warning_amber_rounded),
+                  title: Text('该历史进货单的商品数据不完整'),
+                  subtitle: Text('大项、小项和数量无法一一对应。为避免继续丢失数据，本记录仅允许浏览。'),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('进货信息',
-                        style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      '进货信息',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 16),
                     ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -516,16 +666,20 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                         '${_purchaseDate.year}-${_purchaseDate.month.toString().padLeft(2, '0')}-${_purchaseDate.day.toString().padLeft(2, '0')}',
                       ),
                       trailing: const Icon(Icons.calendar_today),
-                      onTap: !_isEditing ? null : () async {
-                        final d = await showDatePicker(
-                          context: context,
-                          initialDate: _purchaseDate,
-                          firstDate: DateTime(2020),
-                          lastDate: DateTime.now().add(const Duration(days: 365)),
-                          locale: const Locale('zh', 'CN'),
-                        );
-                        if (d != null) setState(() => _purchaseDate = d);
-                      },
+                      onTap: !_isEditing
+                          ? null
+                          : () async {
+                              final d = await showDatePicker(
+                                context: context,
+                                initialDate: _purchaseDate,
+                                firstDate: DateTime(2020),
+                                lastDate: DateTime.now().add(
+                                  const Duration(days: 365),
+                                ),
+                                locale: const Locale('zh', 'CN'),
+                              );
+                              if (d != null) setState(() => _purchaseDate = d);
+                            },
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
@@ -561,44 +715,105 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('进货明细',
-                        style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      '进货明细',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 8),
-                    Text('一次进货仅补充一个小项的库存',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Colors.grey[600],
-                            )),
+                    Text(
+                      '一张进货单可包含多个商品；点击明细可查看或编辑',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 12),
+                    ..._lines.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final line = index == _activeLineIndex
+                          ? _PurchaseLineDraft(
+                              bigItemName: _bigItemName,
+                              smallItemId: _smallItemId,
+                              quantity: _quantity,
+                            )
+                          : entry.value;
+                      final selected = index == _activeLineIndex;
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        color: selected
+                            ? Theme.of(context).colorScheme.primaryContainer
+                            : Theme.of(context).colorScheme.surface,
+                        child: ListTile(
+                          onTap: () => _selectLine(index),
+                          leading: CircleAvatar(child: Text('${index + 1}')),
+                          title: Text(_smallItemName(line.smallItemId)),
+                          subtitle: Text(
+                            '${line.bigItemName} · ${line.quantity} 件',
+                          ),
+                          trailing: _isEditing && _lines.length > 1
+                              ? IconButton(
+                                  tooltip: '删除这条商品',
+                                  onPressed: () => _removeLine(index),
+                                  icon: const Icon(Icons.delete_outline),
+                                )
+                              : null,
+                        ),
+                      );
+                    }),
+                    if (_isEditing)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: _loading ? null : _addLine,
+                          icon: const Icon(Icons.add),
+                          label: const Text('添加商品'),
+                        ),
+                      ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: _bigItemOptions.any((o) => o.name == _bigItemName)
+                      key: ValueKey(
+                        'purchase-line-$_activeLineIndex-$_bigItemName',
+                      ),
+                      initialValue:
+                          _bigItemOptions.any((o) => o.name == _bigItemName)
                           ? _bigItemName
                           : (_bigItemOptions.isNotEmpty
-                              ? _bigItemOptions.first.name
-                              : null),
+                                ? _bigItemOptions.first.name
+                                : null),
                       decoration: const InputDecoration(
                         labelText: '大项',
                         isDense: true,
                       ),
                       isExpanded: true,
                       items: _bigItemOptions
-                          .map((o) => DropdownMenuItem(
-                                value: o.name,
-                                child: Text(o.name,
-                                    overflow: TextOverflow.ellipsis),
-                              ))
+                          .map(
+                            (o) => DropdownMenuItem(
+                              value: o.name,
+                              child: Text(
+                                o.name,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
                           .toList(),
-      onChanged: !_isEditing ? null : (v) {
-        if (v != null) {
-          setState(() {
-            _bigItemName = v;
-            final underBig = _smallItemsUnderBigItem;
-            if (!underBig.any((s) => s.id == _smallItemId)) {
-              _smallItemId = underBig.isNotEmpty ? underBig.first.id : 0;
-            }
-            _updateSmallItemDisplay();
-          });
-        }
-      },
+                      onChanged: !_isEditing
+                          ? null
+                          : (v) {
+                              if (v != null) {
+                                setState(() {
+                                  _bigItemName = v;
+                                  final underBig = _smallItemsUnderBigItem;
+                                  if (!underBig.any(
+                                    (s) => s.id == _smallItemId,
+                                  )) {
+                                    _smallItemId = underBig.isNotEmpty
+                                        ? underBig.first.id
+                                        : 0;
+                                  }
+                                  _updateSmallItemDisplay();
+                                  _writeActiveLineFromEditor();
+                                });
+                              }
+                            },
                     ),
                     if (_isEditing)
                       Align(
@@ -633,13 +848,18 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
                     const SizedBox(height: 16),
                     Row(
                       children: [
-                        Text('数量',
-                            style: Theme.of(context).textTheme.bodyMedium),
+                        Text(
+                          '数量',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
                         const SizedBox(width: 12),
                         QuantityStepper(
                           value: _quantity,
                           enabled: _isEditing,
-                          onChanged: (v) => setState(() => _quantity = v),
+                          onChanged: (v) => setState(() {
+                            _quantity = v;
+                            _writeActiveLineFromEditor();
+                          }),
                         ),
                       ],
                     ),
@@ -652,4 +872,16 @@ class _InventoryPurchaseEditScreenState extends State<InventoryPurchaseEditScree
       ),
     );
   }
+}
+
+class _PurchaseLineDraft {
+  const _PurchaseLineDraft({
+    required this.bigItemName,
+    required this.smallItemId,
+    required this.quantity,
+  });
+
+  final String bigItemName;
+  final int smallItemId;
+  final int quantity;
 }

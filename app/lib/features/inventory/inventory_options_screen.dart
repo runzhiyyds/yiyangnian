@@ -441,6 +441,129 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
     }
   }
 
+  Widget _buildSmallItemList(
+    BuildContext context,
+    List<StorageSmallItemOption> items, {
+    required bool compact,
+  }) {
+    return ListView.builder(
+      padding: compact
+          ? const EdgeInsets.fromLTRB(16, 8, 16, 24)
+          : const EdgeInsets.fromLTRB(12, 8, 4, 16),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        final item = items[index];
+        final selected = item.id == _selectedSmallId;
+        final balance = _balanceBySmallItem[item.id] ?? 0;
+        final storageCount = (_storagesBySmallId[item.id] ?? const []).length;
+        final consumptionCount =
+            (_consumptionsBySmallId[item.id] ?? const []).length;
+
+        if (compact) {
+          return Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            child: ListTile(
+              minTileHeight: 64,
+              title: Text(
+                item.name,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                '库存 $balance · 储值 $storageCount · 消费 $consumptionCount',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                await context.push('/inventory/item/${item.id}');
+                if (!context.mounted) return;
+                context.read<DataRefreshNotifier>().invalidateInventory();
+                await _load();
+              },
+            ),
+          );
+        }
+
+        return InkWell(
+          onTap: () => setState(() => _selectedSmallId = item.id),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 48),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            margin: const EdgeInsets.only(bottom: 4),
+            color: selected
+                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.06)
+                : null,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  item.name,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+                Text(
+                  '库$balance · 储$storageCount · 消$consumptionCount',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildInventoryContent(
+    BuildContext context,
+    List<StorageSmallItemOption> items,
+    String selectedBig,
+    BoxConstraints constraints,
+  ) {
+    final compact = constraints.maxWidth < 720;
+    final addButton = Padding(
+      padding: compact
+          ? const EdgeInsets.fromLTRB(16, 12, 16, 8)
+          : const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: OutlinedButton.icon(
+        icon: const Icon(Icons.add, size: 18),
+        label: const Text('新增小项'),
+        onPressed: () => _addSmallItem(selectedBig),
+      ),
+    );
+
+    if (compact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          addButton,
+          Expanded(child: _buildSmallItemList(context, items, compact: true)),
+        ],
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          flex: 3,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              addButton,
+              const Divider(height: 1),
+              Expanded(
+                child: _buildSmallItemList(context, items, compact: false),
+              ),
+            ],
+          ),
+        ),
+        Container(width: 1, color: Colors.grey[300]),
+        Expanded(flex: 5, child: _buildLinkedDetailPane(context)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -478,7 +601,8 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 DropdownButtonFormField<String>(
-                  value: selectedBig,
+                  key: ValueKey(selectedBig),
+                  initialValue: selectedBig,
                   decoration: const InputDecoration(
                     labelText: '大项',
                     isDense: true,
@@ -534,73 +658,14 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
                     actionLabel: '新增小项',
                     onAction: () => _addSmallItem(selectedBig),
                   )
-                : Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 左侧：新增小项（固定顶部）+ 小项列表
-                Expanded(
-                  flex: 3,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('新增小项'),
-                          onPressed: () => _addSmallItem(selectedBig),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(12, 8, 4, 16),
-                          itemCount: smallInBig.length,
-                    itemBuilder: (context, index) {
-                      final s = smallInBig[index];
-                      final selected = s.id == _selectedSmallId;
-                      final balance = _balanceBySmallItem[s.id] ?? 0;
-                      final storageCount = (_storagesBySmallId[s.id] ?? const []).length;
-                      final consumptionCount = (_consumptionsBySmallId[s.id] ?? const []).length;
-                      return InkWell(
-                        onTap: () => setState(() => _selectedSmallId = s.id),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          margin: const EdgeInsets.only(bottom: 4),
-                          color: selected
-                              ? Theme.of(context).colorScheme.primary.withOpacity(0.06)
-                              : null,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(s.name,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                                  )),
-                              Text(
-                                '库$balance · 储$storageCount · 消$consumptionCount',
-                                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                        ),
-                      ),
-                    ],
+                : LayoutBuilder(
+                    builder: (context, constraints) => _buildInventoryContent(
+                      context,
+                      smallInBig,
+                      selectedBig,
+                      constraints,
+                    ),
                   ),
-                ),
-                Container(width: 1, color: Colors.grey[300]),
-                // 右侧：选中小项详情+操作在顶部，关联明细在下
-                Expanded(
-                  flex: 5,
-                  child: _buildLinkedDetailPane(context),
-                ),
-              ],
-            ),
           ),
         ],
       ),
@@ -1088,4 +1153,3 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
 
   final Map<String, bool> _sectionExpanded = {};
 }
-

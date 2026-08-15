@@ -396,6 +396,11 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
             ..._inRecords.map((r) => Card(
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
+                    onTap: r.source == _InRecordSource.purchase
+                        ? () => context.push(
+                              '/inventory/purchase/${r.data.id}',
+                            )
+                        : null,
                     title: Text(r.displayTitle ?? '入库'),
                     subtitle: Text(
                       '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}-${r.date.day.toString().padLeft(2, '0')} · 数量 ${r.quantity}${r.remark != null && r.remark!.isNotEmpty ? ' · ${r.remark}' : ''}',
@@ -416,8 +421,11 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
                           ),
                         if (r.source == _InRecordSource.purchase) ...[
                           IconButton(
-                            icon: const Icon(Icons.edit, size: 20),
-                            onPressed: () => context.push('/inventory/purchase/${r.data.id}/edit'),
+                            tooltip: '查看进货详情',
+                            icon: const Icon(Icons.visibility_outlined, size: 20),
+                            onPressed: () => context.push(
+                              '/inventory/purchase/${r.data.id}',
+                            ),
                           ),
                           IconButton(
                             icon: const Icon(Icons.delete_outline, size: 20),

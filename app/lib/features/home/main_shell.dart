@@ -2,29 +2,30 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 class MainShell extends StatelessWidget {
-  const MainShell({
-    super.key,
-    required this.navigationShell,
-  });
+  const MainShell({super.key, required this.navigationShell});
 
   final StatefulNavigationShell navigationShell;
 
-  static const _tabTitles = ['客户信息一览', '库存管理', '店铺数据分析', '设置'];
+  static const _tabTitles = ['库存管理', '客户信息一览', '店铺数据分析', '设置'];
 
   @override
   Widget build(BuildContext context) {
-    final title = _tabTitles[navigationShell.currentIndex.clamp(0, _tabTitles.length - 1)];
+    final title =
+        _tabTitles[navigationShell.currentIndex.clamp(
+          0,
+          _tabTitles.length - 1,
+        )];
     return Scaffold(
       appBar: AppBar(
         title: Text(title),
         actions: [
-          if (navigationShell.currentIndex == 0)
+          if (navigationShell.currentIndex == 1)
             IconButton(
               icon: const Icon(Icons.person_add),
               tooltip: '新建客户',
               onPressed: () => context.push('/customer/new'),
             ),
-          if (navigationShell.currentIndex == 1)
+          if (navigationShell.currentIndex == 0)
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: FilledButton.icon(
@@ -32,7 +33,10 @@ class MainShell extends StatelessWidget {
                 label: const Text('进货'),
                 onPressed: () => context.push('/inventory/purchase/new'),
                 style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                 ),
               ),
             ),
@@ -49,14 +53,14 @@ class MainShell extends StatelessWidget {
         },
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.people_outline),
-            selectedIcon: Icon(Icons.people),
-            label: '客户信息一览',
-          ),
-          NavigationDestination(
             icon: Icon(Icons.inventory_2_outlined),
             selectedIcon: Icon(Icons.inventory_2),
             label: '库存管理',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.people_outline),
+            selectedIcon: Icon(Icons.people),
+            label: '客户信息一览',
           ),
           NavigationDestination(
             icon: Icon(Icons.analytics_outlined),
