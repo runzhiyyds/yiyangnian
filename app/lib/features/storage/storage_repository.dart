@@ -9,6 +9,7 @@ abstract class StorageRepositoryBase {
   Future<List<StorageRecordModel>> getByCustomer(String customerName);
   Future<List<StorageRecordModel>> getByStorageDateRange(DateTime start, DateTime end);
   Future<StorageRecordModel?> getById(int id);
+  Future<List<StorageRecordModel>> getByIds(Iterable<int> ids);
   Future<int> getRemainingCount(int storageRecordId);
   Future<StorageRecordModel> create(StorageRecordModel record);
   Future<StorageRecordModel> update(StorageRecordModel record);
@@ -74,6 +75,26 @@ class StorageRepository implements StorageRepositoryBase {
     return StorageRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
   }
 
+  Future<List<StorageRecordModel>> getByIds(Iterable<int> ids) async {
+    final uniqueIds = ids.toSet().toList();
+    if (uniqueIds.isEmpty) return [];
+
+    final records = <StorageRecordModel>[];
+    const chunkSize = 120;
+    for (var offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+      final end = (offset + chunkSize < uniqueIds.length)
+          ? offset + chunkSize
+          : uniqueIds.length;
+      final res = await _client
+          .from('storage_records')
+          .select()
+          .inFilter('id', uniqueIds.sublist(offset, end));
+      records.addAll((res as List).map((e) => StorageRecordModel.fromJson(
+          Map<String, dynamic>.from(e as Map))));
+    }
+    return records;
+  }
+
   Future<int> getRemainingCount(int storageRecordId) async {
     final storage = await getById(storageRecordId);
     if (storage == null) return 0;
@@ -110,9 +131,8 @@ class StorageRepository implements StorageRepositoryBase {
     await _client.from('storage_records').delete().eq('id', id);
   }
 
-  /// 级联删除：先删该储值下所有消费记录，再删储值
+  /// 级联删除交给数据库外键在同一事务中完成，避免客户端半删。
   Future<void> deleteCascade(int id) async {
-    await _client.from('consumption_records').delete().eq('storage_record_id', id);
     await _client.from('storage_records').delete().eq('id', id);
   }
 }

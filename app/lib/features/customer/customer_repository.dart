@@ -76,17 +76,8 @@ class CustomerRepository implements CustomerRepositoryBase {
     await _client.from('customers').delete().eq('name', name);
   }
 
-  /// 级联删除：先删该客户下所有储值的消费记录，再删储值，最后删客户
+  /// 级联删除交给数据库外键在同一事务中完成，避免客户端多请求导致半删状态。
   Future<void> deleteCascade(String name) async {
-    final storages = await _client
-        .from('storage_records')
-        .select('id')
-        .eq('customer_name', name);
-    for (final s in storages as List) {
-      final id = s['id'] as int;
-      await _client.from('consumption_records').delete().eq('storage_record_id', id);
-    }
-    await _client.from('storage_records').delete().eq('customer_name', name);
     await _client.from('customers').delete().eq('name', name);
   }
 
@@ -122,18 +113,24 @@ class CustomerRepository implements CustomerRepositoryBase {
         .from('storage_records')
         .select('id, total_count')
         .eq('customer_name', customerName);
-    int total = 0;
-    for (final s in storages as List) {
-      final id = s['id'] as int;
-      final totalCount = s['total_count'] as int? ?? 0;
-      final consumed = await _client
-          .from('consumption_records')
-          .select()
-          .eq('storage_record_id', id);
-      final count = (consumed as List).length;
-      total += totalCount - count;
+    final rows = storages as List;
+    if (rows.isEmpty) return 0;
+    final storageIds = rows.map((s) => s['id'] as int).toList();
+    final consumptions = await _client
+        .from('consumption_records')
+        .select('storage_record_id')
+        .inFilter('storage_record_id', storageIds);
+    final consumedByStorage = <int, int>{};
+    for (final row in consumptions as List) {
+      final storageId = row['storage_record_id'] as int;
+      consumedByStorage.update(storageId, (count) => count + 1,
+          ifAbsent: () => 1);
     }
-    return total;
+    return rows.fold<int>(0, (total, storage) {
+      final id = storage['id'] as int;
+      final totalCount = storage['total_count'] as int? ?? 0;
+      return total + totalCount - (consumedByStorage[id] ?? 0);
+    });
   }
 
   /// 关联储值编号列表

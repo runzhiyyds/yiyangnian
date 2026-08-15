@@ -41,7 +41,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _connectionOk = false;
     });
     try {
-      debugPrint('[颐养年] 测试 Supabase 连接...');
+      debugPrint('[颐养年] 测试服务连接...');
       await Supabase.instance.client
           .from('customers')
           .select()
@@ -52,7 +52,7 @@ class _LoginScreenState extends State<LoginScreen> {
           );
       if (mounted) {
         setState(() {
-          _error = '连接正常，可尝试登录';
+          _error = '网络连接正常，可以登录';
           _connectionOk = true;
         });
       }
@@ -60,16 +60,8 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       debugPrint('[颐养年] 连接测试失败: $e');
       if (mounted) {
-        final isHostLookup =
-            e.toString().contains('Failed host lookup') ||
-            e.toString().contains('No address associated with hostname');
         setState(() {
-          _error = isHostLookup
-              ? '无法解析服务器地址（DNS 失败）。\n'
-                    '请到 Supabase 控制台确认「颐养年」项目是否已暂停（免费版 7 天无活动会暂停），若已暂停请点击「Restore project」恢复。\n'
-                    '若未暂停，可尝试换网络或换时段重试。'
-              : '连接失败: ${e.toString().replaceAll('Exception:', '').trim()}。'
-                    '请检查网络、Supabase 项目是否已暂停（免费版 7 天无活动会暂停）';
+          _error = '暂时无法连接服务，请检查网络后重试；如持续失败请联系管理员。';
           _connectionOk = false;
         });
       }
@@ -89,10 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
           .signIn(_emailController.text.trim(), _passwordController.text)
           .timeout(
             const Duration(seconds: 15),
-            onTimeout: () => throw Exception(
-              '登录超时(15秒)。'
-              'Supabase 免费版项目若 7 天无活动会暂停，首次请求需等待唤醒',
-            ),
+            onTimeout: () => throw TimeoutException('登录超时'),
           );
       debugPrint('[颐养年] 登录成功');
       if (!mounted) return;
@@ -111,10 +100,9 @@ class _LoginScreenState extends State<LoginScreen> {
         if (msg.contains('Invalid login credentials')) {
           msg = '邮箱或密码错误';
         } else if (msg.contains('Email not confirmed')) {
-          msg =
-              '账号邮箱未确认。本应用无需邮件验证，请在 Supabase 关闭 '
-              'Authentication → Email 的「Confirm email」后，'
-              '重新执行体验账号 SQL（见 docs/体验账号与演示数据.md）';
+          msg = '账号暂未启用，请联系管理员';
+        } else if (e is TimeoutException) {
+          msg = '登录超时，请检查网络后重试';
         } else if (msg.contains('Rate limit')) {
           msg = '请求过于频繁，请稍后再试';
         }
@@ -284,13 +272,13 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    '连接异常？请先点下方测试连接',
+                    '登录遇到问题？可先检查网络连接',
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton(
                     onPressed: _loading ? null : _testConnection,
-                    child: const Text('测试连接'),
+                    child: const Text('检查网络'),
                   ),
                 ],
               ),

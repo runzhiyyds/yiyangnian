@@ -79,11 +79,9 @@ class SettingsScreen extends StatelessWidget {
         ListTile(
           leading: const Icon(Icons.system_update),
           title: const Text('检查更新'),
-          subtitle: Text(Config.hasPgyerCheck
-              ? '已配置蒲公英 · 点击检查'
-              : Config.hasUpdateCheck
-                  ? '已配置自建更新 · 点击检查'
-                  : '检查是否有新版本可用（需配置 PGYER 或 UPDATE_CHECK_URL）'),
+          subtitle: Text(Config.hasPgyerCheck || Config.hasUpdateCheck
+              ? '点击检查是否有新版本'
+              : '当前未启用在线更新，请联系管理员'),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => _checkUpdate(context),
         ),
@@ -108,7 +106,7 @@ class SettingsScreen extends StatelessWidget {
     if (!Config.hasPgyerCheck && !Config.hasUpdateCheck) {
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('请在 env.json 中配置 PGYER_APP_KEY 与 PGYER_API_KEY，或配置 UPDATE_CHECK_URL'),
+          content: Text('当前未启用在线更新，请联系管理员'),
           duration: Duration(seconds: 4),
         ),
       );
@@ -125,11 +123,9 @@ class SettingsScreen extends StatelessWidget {
     messenger.hideCurrentSnackBar();
     if (info == null) {
       messenger.showSnackBar(
-        SnackBar(
-          content: Text(Config.hasPgyerCheck
-              ? '检查失败，请检查网络或稍后重试（设备需能访问 api.pgyer.com）'
-              : '检查失败，请检查网络或稍后重试'),
-          duration: const Duration(seconds: 5),
+        const SnackBar(
+          content: Text('暂时无法检查更新，请确认网络后重试'),
+          duration: Duration(seconds: 5),
         ),
       );
       return;

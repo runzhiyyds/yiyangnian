@@ -177,33 +177,38 @@ class _CustomerTreeTile extends StatelessWidget {
     final subtitle = [phoneStr, lifeStr].where((s) => s.isNotEmpty).join(' · ');
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          leading: const Icon(Icons.person_outline, size: 28),
-          title: Text(
-            customer.name,
-            style: const TextStyle(fontWeight: FontWeight.bold),
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.person_outline, size: 28),
+            title: Text(
+              customer.name,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: subtitle.isNotEmpty
+                ? Text(subtitle, style: TextStyle(fontSize: 13, color: Colors.grey[600]))
+                : null,
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async => await onTap(),
           ),
-          subtitle: subtitle.isNotEmpty
-              ? Text(subtitle, style: TextStyle(fontSize: 13, color: Colors.grey[600]))
-              : null,
-          trailing: IconButton(
-            icon: const Icon(Icons.arrow_forward),
-            onPressed: () async => await onTap(),
-          ),
-          children: storages.isEmpty
-              ? [
-                  const ListTile(
-                    title: Text('暂无储值记录', style: TextStyle(color: Colors.grey)),
-                  )
-                ]
-              : storages
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              leading: const SizedBox(width: 28),
+              title: Text(
+                storages.isEmpty ? '暂无储值记录' : '查看储值记录（${storages.length}）',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: storages.isEmpty ? Colors.grey : null,
+                ),
+              ),
+              enabled: storages.isNotEmpty,
+              tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+              children: storages
                   .map((s) => _StorageTreeTile(
                         storage: s,
                         customerName: customer.name,
-                        consumptions:
-                            consumptionsByStorage[s.id] ?? [],
+                        consumptions: consumptionsByStorage[s.id] ?? [],
                         smallItemNames: smallItemNames,
                         onRefresh: onRefresh,
                         onStorageTap: () async {
@@ -212,7 +217,9 @@ class _CustomerTreeTile extends StatelessWidget {
                         },
                       ))
                   .toList(),
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }

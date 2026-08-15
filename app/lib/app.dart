@@ -29,7 +29,7 @@ class _YiyangnianAppState extends State<YiyangnianApp> {
       title: '颐养年店铺管理',
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
-      themeMode: ThemeMode.light,
+      themeMode: ThemeMode.system,
       locale: const Locale('zh', 'CN'),
       supportedLocales: const [
         Locale('zh', 'CN'),

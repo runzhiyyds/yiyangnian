@@ -152,11 +152,8 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
     final storageIdsWeek = consumptionsWeek.map((c) => c.storageRecordId).toSet().toList();
     final storageIdsMonth = consumptionsMonth.map((c) => c.storageRecordId).toSet().toList();
     final allStorageIds = {...storageIdsWeek, ...storageIdsMonth}.toList();
-    final storageMap = <int, StorageRecordModel>{};
-    for (final id in allStorageIds) {
-      final s = await storageRepo.getById(id);
-      if (s != null) storageMap[id] = s;
-    }
+    final relatedStorages = await storageRepo.getByIds(allStorageIds);
+    final storageMap = {for (final storage in relatedStorages) storage.id: storage};
     final smallOptions = await smallItemRepo.getAll();
     var smallIdToName = {for (var o in smallOptions) o.id: o.name};
 
@@ -612,11 +609,10 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     try {
       var consumptions = await consumptionRepo.getByDateRange(start, end);
       final storageIds = consumptions.map((c) => c.storageRecordId).toSet().toList();
-      final storageMap = <int, StorageRecordModel>{};
-      for (final id in storageIds) {
-        final s = await storageRepo.getById(id);
-        if (s != null) storageMap[id] = s;
-      }
+      final relatedStorages = await storageRepo.getByIds(storageIds);
+      final storageMap = {
+        for (final storage in relatedStorages) storage.id: storage,
+      };
       final smallOptions = await smallItemRepo.getAll();
       var smallIdToName = {for (var o in smallOptions) o.id: o.name};
       final email = context.read<AuthService>().user?.email;
@@ -1086,11 +1082,10 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       final smallItemRepo = context.read<StorageSmallItemRepository>();
       var consumptions = await consumptionRepo.getByDateRange(start, end);
       final storageIds = consumptions.map((c) => c.storageRecordId).toSet().toList();
-      final storageMap = <int, StorageRecordModel>{};
-      for (final id in storageIds) {
-        final s = await storageRepo.getById(id);
-        if (s != null) storageMap[id] = s;
-      }
+      final relatedStorages = await storageRepo.getByIds(storageIds);
+      final storageMap = {
+        for (final storage in relatedStorages) storage.id: storage,
+      };
       final smallOptions = await smallItemRepo.getAll();
       var smallNames = {for (var o in smallOptions) o.id: o.name};
       final email = context.read<AuthService>().user?.email;
@@ -1324,6 +1319,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     _summaryCache.clear();
     _calendarCache.clear();
     final customerRepo = context.read<CustomerRepository>();
+    final storageRepo = context.read<StorageRepository>();
 
     setState(() {
       _loading = true;
@@ -1333,15 +1329,28 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     try {
       final bigItemRepo = context.read<StorageBigItemRepository>();
       final email = context.read<AuthService>().user?.email;
-      var customers =
-          DemoMode.filterCustomers(email, await retryOnFailure(() => customerRepo.getAll()));
-      final bigOptions = await bigItemRepo.getAll();
-      final deposits = await Future.wait(
-        customers.map((c) => customerRepo.getTotalDeposit(c.name)),
+      final results = await Future.wait<dynamic>([
+        retryOnFailure(() => customerRepo.getAll()),
+        bigItemRepo.getAll(),
+        storageRepo.getAll(),
+      ]);
+      var customers = DemoMode.filterCustomers(
+        email,
+        results[0] as List<CustomerModel>,
       );
-      final depositByCustomer = {
-        for (var i = 0; i < customers.length; i++) customers[i].name: deposits[i],
-      };
+      final bigOptions = results[1] as List<StorageBigItemOption>;
+      final scopedStorages = DemoMode.filterStorages(
+        email,
+        results[2] as List<StorageRecordModel>,
+      );
+      final depositByCustomer = <String, double>{};
+      for (final storage in scopedStorages) {
+        depositByCustomer.update(
+          storage.customerName,
+          (value) => value + storage.amount,
+          ifAbsent: () => storage.amount,
+        );
+      }
       final sorted = customers.toList()
         ..sort((a, b) =>
             (depositByCustomer[b.name] ?? 0).compareTo(depositByCustomer[a.name] ?? 0));
@@ -1492,6 +1501,21 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           children: [
             Text('周期汇总', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
+            Card(
+              child: ExpansionTile(
+                title: const Text('筛选条件'),
+                subtitle: Text(
+                  '${_selectedBigItemFilter ?? '全部大项'} · '
+                  '${_analyticsRangeStart.month}/${_analyticsRangeStart.day} - '
+                  '${_analyticsRangeEnd.month}/${_analyticsRangeEnd.day}',
+                ),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
             // 第一级：全部 / 储值大项A / 储值大项B …
             Text('按储值大项', style: Theme.of(context).textTheme.labelLarge?.copyWith(color: Colors.grey[600])),
             const SizedBox(height: 6),
@@ -1591,6 +1615,12 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
                 ChoiceChip(selected: _isPresetSelected('本季度'), label: const Text('本季度'), onSelected: (_) => _setPresetRange('本季度')),
                 ChoiceChip(selected: _isPresetSelected('本年'), label: const Text('本年'), onSelected: (_) => _setPresetRange('本年')),
               ],
+            ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 16),
             // 第三级：经营金额（储值、进货）+ 大项/小项消费次数
