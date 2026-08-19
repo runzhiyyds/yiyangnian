@@ -170,8 +170,11 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
     storagesInRangeWeek = DemoMode.filterStorages(email, storagesInRangeWeek);
     var purchasesInRangeWeek =
         await purchaseRepo.getByDateRange(weekStart, weekEnd);
-    purchasesInRangeWeek =
-        DemoMode.filterInventoryPurchases(email, purchasesInRangeWeek);
+    purchasesInRangeWeek = DemoMode.filterInventoryPurchases(
+      email,
+      purchasesInRangeWeek,
+      smallItemNames: smallIdToName,
+    );
     final periodSummary = _buildPeriodSummaryFromConsumptions(
       weekStart, weekEnd, consumptionsWeek, storageMap, smallIdToName,
       storagesInRangeWeek, purchasesInRangeWeek,
@@ -627,8 +630,11 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       var storagesInRange = await storageRepo.getByStorageDateRange(start, end);
       storagesInRange = DemoMode.filterStorages(email, storagesInRange);
       var purchasesInRange = await purchaseRepo.getByDateRange(start, end);
-      purchasesInRange =
-          DemoMode.filterInventoryPurchases(email, purchasesInRange);
+      purchasesInRange = DemoMode.filterInventoryPurchases(
+        email,
+        purchasesInRange,
+        smallItemNames: smallIdToName,
+      );
       final double totalAll = storagesInRange.fold<double>(0, (sum, s) => sum + s.amount);
 
       final bigCountsAll = <String, int>{};

@@ -52,8 +52,23 @@ class AccountDataScope {
   static bool isDemoConsumption(ConsumptionRecordModel c) =>
       isDemoBusinessCode(c.code);
 
-  static bool isDemoInventoryPurchase(InventoryPurchaseRecordModel p) =>
-      isDemoBusinessCode(p.code) || isDemoRemark(p.remark);
+  static bool isDemoInventoryPurchase(
+    InventoryPurchaseRecordModel p, {
+    Map<int, String> smallItemNames = const {},
+  }) {
+    if (isDemoBusinessCode(p.code) || isDemoRemark(p.remark)) return true;
+
+    // 新建进货编号由数据库统一生成 JHxxxxx，不能再依赖旧演示种子使用的
+    // JH90xxxxx 判断数据域。以明细关联的小项名称作为可靠兜底，避免数据库
+    // 已保存成功但客户端随后把该进货单过滤掉，造成“库存没有增加”的假象。
+    if (p.storageSmallItemIds.isEmpty || smallItemNames.isEmpty) return false;
+    final itemNames = p.storageSmallItemIds
+        .map((id) => smallItemNames[id])
+        .whereType<String>()
+        .toList();
+    return itemNames.length == p.storageSmallItemIds.length &&
+        itemNames.every(isDemoTagged);
+  }
 
   static bool isDemoInventorySuppIn(
     InventorySuppInRecordModel r, {
@@ -119,11 +134,16 @@ class AccountDataScope {
 
   static List<InventoryPurchaseRecordModel> filterInventoryPurchases(
     String? email,
-    List<InventoryPurchaseRecordModel> purchases,
-  ) =>
-      purchases
-          .where((p) => includeForUser(email, isDemoInventoryPurchase(p)))
-          .toList();
+    List<InventoryPurchaseRecordModel> purchases, {
+    Map<int, String> smallItemNames = const {},
+  }) => purchases
+      .where(
+        (p) => includeForUser(
+          email,
+          isDemoInventoryPurchase(p, smallItemNames: smallItemNames),
+        ),
+      )
+      .toList();
 
   static List<InventorySuppInRecordModel> filterInventorySuppIn(
     String? email,
@@ -229,7 +249,11 @@ class AccountDataScope {
     final scopedSmallOptions = filterSmallItemOptions(email, smallOptions);
     final nameById = {for (final o in smallOptions) o.id: o.name};
     return (
-      purchases: filterInventoryPurchases(email, purchases),
+      purchases: filterInventoryPurchases(
+        email,
+        purchases,
+        smallItemNames: nameById,
+      ),
       suppIn: filterInventorySuppIn(email, suppIn, nameById),
       consumptions: filterInventoryConsumptions(email, consumptions, nameById),
       smallOptions: scopedSmallOptions,

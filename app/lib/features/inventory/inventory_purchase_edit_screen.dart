@@ -37,7 +37,6 @@ class _InventoryPurchaseEditScreenState
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _totalAmountController;
   late TextEditingController _remarkController;
-  late TextEditingController _smallItemDisplayController;
 
   String _bigItemName = '';
   int _smallItemId = 0;
@@ -68,7 +67,6 @@ class _InventoryPurchaseEditScreenState
     super.initState();
     _totalAmountController = TextEditingController(text: '0');
     _remarkController = TextEditingController();
-    _smallItemDisplayController = TextEditingController(text: '请选择储值小项');
     _isEditing = !widget.initialReadOnly || widget.purchaseId == null;
     _loadOptions();
     if (widget.purchaseId != null) {
@@ -80,16 +78,7 @@ class _InventoryPurchaseEditScreenState
   void dispose() {
     _totalAmountController.dispose();
     _remarkController.dispose();
-    _smallItemDisplayController.dispose();
     super.dispose();
-  }
-
-  void _updateSmallItemDisplay() {
-    final list = _smallItemsUnderBigItem;
-    final found = list.where((o) => o.id == _smallItemId);
-    _smallItemDisplayController.text = found.isNotEmpty
-        ? found.first.name
-        : (list.isNotEmpty ? list.first.name : '请选择储值小项');
   }
 
   int? _getBigItemId() {
@@ -129,7 +118,6 @@ class _InventoryPurchaseEditScreenState
     _bigItemName = line.bigItemName;
     _smallItemId = line.smallItemId;
     _quantity = line.quantity;
-    _updateSmallItemDisplay();
   }
 
   void _ensureInitialLine() {
@@ -235,7 +223,6 @@ class _InventoryPurchaseEditScreenState
         }
         _ensureInitialLine();
       });
-      _updateSmallItemDisplay();
     }
   }
 
@@ -281,7 +268,6 @@ class _InventoryPurchaseEditScreenState
         if (!underBig.any((item) => item.id == _smallItemId)) {
           _smallItemId = underBig.isEmpty ? 0 : underBig.first.id;
         }
-        _updateSmallItemDisplay();
         _writeActiveLineFromEditor();
       });
       cache.set(
@@ -342,7 +328,6 @@ class _InventoryPurchaseEditScreenState
             ..sort((a, b) => a.name.compareTo(b.name));
         }
         _smallItemId = opt.id;
-        _updateSmallItemDisplay();
         _writeActiveLineFromEditor();
       });
       cache.set(
@@ -386,7 +371,6 @@ class _InventoryPurchaseEditScreenState
       if (added != null && mounted) {
         setState(() {
           _smallItemId = added;
-          _updateSmallItemDisplay();
         });
       }
       return;
@@ -446,7 +430,6 @@ class _InventoryPurchaseEditScreenState
                         if (added != null && mounted) {
                           setState(() {
                             _smallItemId = added;
-                            _updateSmallItemDisplay();
                           });
                         }
                       },
@@ -484,7 +467,6 @@ class _InventoryPurchaseEditScreenState
     if (result != null && mounted) {
       setState(() {
         _smallItemId = result;
-        _updateSmallItemDisplay();
         _writeActiveLineFromEditor();
       });
     }
@@ -522,6 +504,164 @@ class _InventoryPurchaseEditScreenState
     }
   }
 
+  _PurchaseLineDraft _lineForDisplay(int index) {
+    if (index == _activeLineIndex) {
+      return _PurchaseLineDraft(
+        bigItemName: _bigItemName,
+        smallItemId: _smallItemId,
+        quantity: _quantity,
+      );
+    }
+    return _lines[index];
+  }
+
+  int get _draftTotalQuantity {
+    var total = 0;
+    for (var index = 0; index < _lines.length; index++) {
+      total += _lineForDisplay(index).quantity;
+    }
+    return total;
+  }
+
+  bool _sameList<T>(List<T> left, List<T> right) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (left[index] != right[index]) return false;
+    }
+    return true;
+  }
+
+  Widget _buildActiveProductEditor(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLowest,
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Divider(height: 1),
+          const SizedBox(height: 16),
+          const _PurchaseStepLabel(
+            step: 1,
+            title: '选择商品大项',
+            description: '先选择商品所属系列或类别',
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            key: ValueKey('purchase-line-$_activeLineIndex-$_bigItemName'),
+            initialValue: _bigItemOptions.any((o) => o.name == _bigItemName)
+                ? _bigItemName
+                : (_bigItemOptions.isNotEmpty
+                      ? _bigItemOptions.first.name
+                      : null),
+            decoration: const InputDecoration(
+              labelText: '大项',
+              hintText: '请选择大项',
+            ),
+            isExpanded: true,
+            items: _bigItemOptions
+                .map(
+                  (option) => DropdownMenuItem(
+                    value: option.name,
+                    child: Text(option.name, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: !_isEditing
+                ? null
+                : (value) {
+                    if (value == null) return;
+                    setState(() {
+                      _bigItemName = value;
+                      final underBig = _smallItemsUnderBigItem;
+                      if (!underBig.any((item) => item.id == _smallItemId)) {
+                        _smallItemId = underBig.isNotEmpty
+                            ? underBig.first.id
+                            : 0;
+                      }
+                      _writeActiveLineFromEditor();
+                    });
+                  },
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _loading ? null : _addBigItem,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('没有合适的大项？新增大项'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          const _PurchaseStepLabel(
+            step: 2,
+            title: '选择具体商品（小项）',
+            description: '小项会根据上面选择的大项自动筛选',
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: _loading || !_isEditing ? null : _pickSmallItem,
+              style: OutlinedButton.styleFrom(
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.inventory_2_outlined),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _smallItemId > 0
+                          ? _smallItemName(_smallItemId)
+                          : '请选择商品小项',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _loading ? null : _addSmallItem,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('没有这个商品？新增小项'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          const _PurchaseStepLabel(
+            step: 3,
+            title: '填写本次进货数量',
+            description: '只填写当前这个商品的件数',
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              QuantityStepper(
+                value: _quantity,
+                enabled: _isEditing,
+                onChanged: (value) => setState(() {
+                  _quantity = value;
+                  _writeActiveLineFromEditor();
+                }),
+              ),
+              const SizedBox(width: 12),
+              Text('件', style: Theme.of(context).textTheme.titleMedium),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _save() async {
     if (_hasLineDataMismatch) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -542,6 +682,14 @@ class _InventoryPurchaseEditScreenState
       ).showSnackBar(const SnackBar(content: Text('每条进货明细的数量都必须大于 0')));
       return;
     }
+    final smallItemIds = _lines.map((line) => line.smallItemId).toList();
+    if (smallItemIds.toSet().length != smallItemIds.length) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('同一种商品只需添加一次，请合并数量后再保存')));
+      return;
+    }
+    if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() {
       _loading = true;
@@ -565,25 +713,38 @@ class _InventoryPurchaseEditScreenState
             : _remarkController.text.trim(),
       );
 
-      if (widget.purchaseId != null) {
-        await repo.update(record);
-      } else {
-        await repo.create(record);
+      final saved = widget.purchaseId != null
+          ? await repo.update(record)
+          : await repo.create(record);
+
+      if (!saved.hasAlignedItems ||
+          !_sameList(saved.storageBigItems, record.storageBigItems) ||
+          !_sameList(saved.storageSmallItemIds, record.storageSmallItemIds) ||
+          !_sameList(saved.quantities, record.quantities)) {
+        throw StateError('数据库返回的进货明细与提交内容不一致');
       }
 
       if (mounted) {
         context.read<DataRefreshNotifier>().invalidateInventory();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('保存成功')));
-        context.pop(true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '进货成功：${saved.itemCount} 种商品，共 ${saved.quantities.fold<int>(0, (sum, value) => sum + value)} 件已加入库存',
+            ),
+          ),
+        );
+        context.pop(saved.id);
       }
     } catch (e) {
       if (mounted) {
+        final message = toUserFriendlyError(e);
         setState(() {
-          _error = e.toString();
+          _error = '保存失败：$message';
           _loading = false;
         });
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存失败：$message')));
       }
     }
   }
@@ -693,6 +854,15 @@ class _InventoryPurchaseEditScreenState
                       inputFormatters: [
                         FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
                       ],
+                      validator: (value) {
+                        final text = value?.trim() ?? '';
+                        if (text.isEmpty) return null;
+                        final amount = double.tryParse(text);
+                        if (amount == null || amount < 0) {
+                          return '请输入正确的金额';
+                        }
+                        return null;
+                      },
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
@@ -715,154 +885,121 @@ class _InventoryPurchaseEditScreenState
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      '进货明细',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '一张进货单可包含多个商品；点击明细可查看或编辑',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '本单商品',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.secondaryContainer,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            '${_lines.length} 种 · $_draftTotalQuantity 件',
+                            style: Theme.of(context).textTheme.labelLarge,
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.primaryContainer.withValues(alpha: 0.45),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.lightbulb_outline),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              '一张进货单可以加入多种商品。每种商品都要依次选择“大项 → 小项”，再填写它的进货数量。',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     ..._lines.asMap().entries.map((entry) {
                       final index = entry.key;
-                      final line = index == _activeLineIndex
-                          ? _PurchaseLineDraft(
-                              bigItemName: _bigItemName,
-                              smallItemId: _smallItemId,
-                              quantity: _quantity,
-                            )
-                          : entry.value;
+                      final line = _lineForDisplay(index);
                       final selected = index == _activeLineIndex;
                       return Card(
-                        margin: const EdgeInsets.only(bottom: 8),
+                        margin: const EdgeInsets.only(bottom: 12),
                         color: selected
                             ? Theme.of(context).colorScheme.primaryContainer
-                            : Theme.of(context).colorScheme.surface,
-                        child: ListTile(
-                          onTap: () => _selectLine(index),
-                          leading: CircleAvatar(child: Text('${index + 1}')),
-                          title: Text(_smallItemName(line.smallItemId)),
-                          subtitle: Text(
-                            '${line.bigItemName} · ${line.quantity} 件',
+                                  .withValues(alpha: 0.3)
+                            : null,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(
+                            color: selected
+                                ? Theme.of(context).colorScheme.primary
+                                : Theme.of(context).colorScheme.outlineVariant,
+                            width: selected ? 1.5 : 1,
                           ),
-                          trailing: _isEditing && _lines.length > 1
-                              ? IconButton(
-                                  tooltip: '删除这条商品',
-                                  onPressed: () => _removeLine(index),
-                                  icon: const Icon(Icons.delete_outline),
-                                )
-                              : null,
+                        ),
+                        child: Column(
+                          children: [
+                            ListTile(
+                              onTap: _isEditing
+                                  ? () => _selectLine(index)
+                                  : null,
+                              leading: CircleAvatar(
+                                child: Text('${index + 1}'),
+                              ),
+                              title: Text(
+                                '商品 ${index + 1}：${_smallItemName(line.smallItemId)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${line.bigItemName} → ${_smallItemName(line.smallItemId)} · ${line.quantity} 件',
+                              ),
+                              trailing: _isEditing && _lines.length > 1
+                                  ? IconButton(
+                                      tooltip: '删除商品 ${index + 1}',
+                                      onPressed: () => _removeLine(index),
+                                      icon: const Icon(Icons.delete_outline),
+                                    )
+                                  : (!_isEditing
+                                        ? null
+                                        : Icon(
+                                            selected
+                                                ? Icons.expand_less
+                                                : Icons.expand_more,
+                                          )),
+                            ),
+                            if (_isEditing && selected)
+                              _buildActiveProductEditor(context),
+                          ],
                         ),
                       );
                     }),
                     if (_isEditing)
-                      Align(
-                        alignment: Alignment.centerLeft,
+                      SizedBox(
+                        width: double.infinity,
                         child: OutlinedButton.icon(
                           onPressed: _loading ? null : _addLine,
-                          icon: const Icon(Icons.add),
-                          label: const Text('添加商品'),
+                          icon: const Icon(Icons.add_circle_outline),
+                          label: const Text('继续添加另一种商品'),
                         ),
                       ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<String>(
-                      key: ValueKey(
-                        'purchase-line-$_activeLineIndex-$_bigItemName',
-                      ),
-                      initialValue:
-                          _bigItemOptions.any((o) => o.name == _bigItemName)
-                          ? _bigItemName
-                          : (_bigItemOptions.isNotEmpty
-                                ? _bigItemOptions.first.name
-                                : null),
-                      decoration: const InputDecoration(
-                        labelText: '大项',
-                        isDense: true,
-                      ),
-                      isExpanded: true,
-                      items: _bigItemOptions
-                          .map(
-                            (o) => DropdownMenuItem(
-                              value: o.name,
-                              child: Text(
-                                o.name,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: !_isEditing
-                          ? null
-                          : (v) {
-                              if (v != null) {
-                                setState(() {
-                                  _bigItemName = v;
-                                  final underBig = _smallItemsUnderBigItem;
-                                  if (!underBig.any(
-                                    (s) => s.id == _smallItemId,
-                                  )) {
-                                    _smallItemId = underBig.isNotEmpty
-                                        ? underBig.first.id
-                                        : 0;
-                                  }
-                                  _updateSmallItemDisplay();
-                                  _writeActiveLineFromEditor();
-                                });
-                              }
-                            },
-                    ),
-                    if (_isEditing)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          onPressed: _loading ? null : _addBigItem,
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('新增大项'),
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      readOnly: true,
-                      decoration: const InputDecoration(
-                        labelText: '小项',
-                        hintText: '请选择储值小项',
-                        isDense: true,
-                      ),
-                      controller: _smallItemDisplayController,
-                      enabled: _isEditing,
-                      onTap: _loading || !_isEditing ? null : _pickSmallItem,
-                    ),
-                    if (_isEditing)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          onPressed: _loading ? null : _addSmallItem,
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('新增小项'),
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Text(
-                          '数量',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(width: 12),
-                        QuantityStepper(
-                          value: _quantity,
-                          enabled: _isEditing,
-                          onChanged: (v) => setState(() {
-                            _quantity = v;
-                            _writeActiveLineFromEditor();
-                          }),
-                        ),
-                      ],
-                    ),
                   ],
                 ),
               ),
@@ -884,4 +1021,62 @@ class _PurchaseLineDraft {
   final String bigItemName;
   final int smallItemId;
   final int quantity;
+}
+
+class _PurchaseStepLabel extends StatelessWidget {
+  const _PurchaseStepLabel({
+    required this.step,
+    required this.title,
+    required this.description,
+  });
+
+  final int step;
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 28,
+          height: 28,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary,
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            '$step',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onPrimary,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                description,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }
