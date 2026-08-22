@@ -37,7 +37,7 @@ BEGIN
   SELECT EXISTS (
     SELECT 1 FROM customers WHERE name LIKE '演示-%'
     UNION ALL
-    SELECT 1 FROM inventory_purchase_records WHERE code LIKE 'JH90%'
+    SELECT 1 FROM storage_small_item_options WHERE name LIKE '演示-%'
   ) INTO v_has_demo_data;
 
   IF v_has_demo_data AND
@@ -146,7 +146,7 @@ WHERE row.owner_id IS NULL;
 
 UPDATE storage_records AS row
 SET owner_id = CASE
-  WHEN row.customer_name LIKE '演示-%' OR row.code LIKE 'CZ90%'
+  WHEN row.customer_name LIKE '演示-%'
     THEN context.demo_owner
   ELSE context.production_owner
 END
@@ -164,7 +164,16 @@ WHERE row.owner_id IS NULL;
 
 UPDATE inventory_purchase_records AS row
 SET owner_id = CASE
-  WHEN row.code LIKE 'JH90%' OR row.remark LIKE '%演示%'
+  -- 编号序列是全局共享的，正式进货也可能是 JH90xxx。只有进货单的
+  -- 全部小项都属于体验账号时，才将整单归入演示数据。
+  WHEN CARDINALITY(COALESCE(row.storage_small_item_ids, ARRAY[]::INT[])) > 0
+   AND CARDINALITY(COALESCE(row.storage_small_item_ids, ARRAY[]::INT[])) = (
+     SELECT COUNT(*)
+     FROM unnest(COALESCE(row.storage_small_item_ids, ARRAY[]::INT[])) AS ids(item_id)
+     JOIN storage_small_item_options AS item
+       ON item.id = ids.item_id
+      AND item.owner_id = context.demo_owner
+   )
     THEN context.demo_owner
   ELSE context.production_owner
 END

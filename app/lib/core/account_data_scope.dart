@@ -7,7 +7,7 @@ import '../features/storage_options/storage_small_item_repository.dart';
 
 /// 按登录账号隔离「演示域」与「正式域」数据视图。
 ///
-/// - 体验账号 [DemoCredentials.email]：仅见「演示-」前缀及 JH90/CZ90/XF90 编号数据
+/// - 体验账号 [DemoCredentials.email]：仅见「演示-」客户/商品关联数据
 /// - 其他账号：仅见正式数据，隐藏全部演示数据
 class AccountDataScope {
   AccountDataScope._();
@@ -47,7 +47,7 @@ class AccountDataScope {
   static bool isDemoCustomer(CustomerModel c) => isDemoTagged(c.name);
 
   static bool isDemoStorage(StorageRecordModel s) =>
-      isDemoTagged(s.customerName) || isDemoBusinessCode(s.code);
+      isDemoTagged(s.customerName);
 
   static bool isDemoConsumption(ConsumptionRecordModel c) =>
       isDemoBusinessCode(c.code);
@@ -56,18 +56,20 @@ class AccountDataScope {
     InventoryPurchaseRecordModel p, {
     Map<int, String> smallItemNames = const {},
   }) {
-    if (isDemoBusinessCode(p.code) || isDemoRemark(p.remark)) return true;
+    // 演示数据种子曾将全局进货编号序列推进到 900xx，因此正式账号后续
+    // 新建的进货单也会是 JH90xxx。编号不是数据归属，必须优先以关联商品判断。
+    if (p.storageSmallItemIds.isNotEmpty && smallItemNames.isNotEmpty) {
+      final itemNames = p.storageSmallItemIds
+          .map((id) => smallItemNames[id])
+          .whereType<String>()
+          .toList();
+      if (itemNames.length == p.storageSmallItemIds.length) {
+        return itemNames.every(isDemoTagged);
+      }
+    }
 
-    // 新建进货编号由数据库统一生成 JHxxxxx，不能再依赖旧演示种子使用的
-    // JH90xxxxx 判断数据域。以明细关联的小项名称作为可靠兜底，避免数据库
-    // 已保存成功但客户端随后把该进货单过滤掉，造成“库存没有增加”的假象。
-    if (p.storageSmallItemIds.isEmpty || smallItemNames.isEmpty) return false;
-    final itemNames = p.storageSmallItemIds
-        .map((id) => smallItemNames[id])
-        .whereType<String>()
-        .toList();
-    return itemNames.length == p.storageSmallItemIds.length &&
-        itemNames.every(isDemoTagged);
+    // 只有历史记录无法解析关联商品时，才用备注/旧编号作兼容兜底。
+    return isDemoRemark(p.remark) || isDemoBusinessCode(p.code);
   }
 
   static bool isDemoInventorySuppIn(
@@ -110,8 +112,11 @@ class AccountDataScope {
   ) =>
       consumptions.where((c) {
         final storage = storageMap[c.storageRecordId];
-        final isDemo = isDemoConsumption(c) ||
-            (storage != null && isDemoStorage(storage));
+        // 消费编号和进货编号一样来自全局序列；只要父储值记录存在，
+        // 就应以父记录的客户归属为准。编号只用于无法找到父记录的历史兜底。
+        final isDemo = storage != null
+            ? isDemoStorage(storage)
+            : isDemoConsumption(c);
         return includeForUser(email, isDemo);
       }).toList();
 
