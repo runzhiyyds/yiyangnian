@@ -12,6 +12,7 @@ import '../storage_options/storage_small_item_repository.dart';
 import 'inventory_consumption_repository.dart';
 import 'inventory_models.dart';
 import 'widgets/quantity_stepper.dart';
+import 'widgets/inventory_void_dialog.dart';
 
 class InventorySuppOutEditScreen extends StatefulWidget {
   const InventorySuppOutEditScreen({
@@ -19,19 +20,23 @@ class InventorySuppOutEditScreen extends StatefulWidget {
     this.recordId,
     this.initialSmallItemId,
     this.initialSmallItemName,
+    this.initialReadOnly = false,
   });
 
   final int? recordId;
   final int? initialSmallItemId;
+
   /// 从大项小项管理页进入时传入，用于只读展示
   final String? initialSmallItemName;
+  final bool initialReadOnly;
 
   @override
   State<InventorySuppOutEditScreen> createState() =>
       _InventorySuppOutEditScreenState();
 }
 
-class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen> {
+class _InventorySuppOutEditScreenState
+    extends State<InventorySuppOutEditScreen> {
   late TextEditingController _remarkController;
 
   List<StorageSmallItemOption> _smallItemOptions = [];
@@ -40,15 +45,19 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
   int _quantity = 0;
   bool _loading = false;
   String? _error;
+  late bool _isEditing;
+  InventoryConsumptionRecordModel? _loadedRecord;
 
   String _cacheKey(BuildContext context) =>
       DemoMode.inventorySmallOptionsCacheKey(
-          context.read<AuthService>().user?.email);
+        context.read<AuthService>().user?.email,
+      );
 
   @override
   void initState() {
     super.initState();
     _remarkController = TextEditingController();
+    _isEditing = !widget.initialReadOnly || widget.recordId == null;
     _loadOptions();
     if (widget.recordId != null) {
       _loadRecord();
@@ -90,6 +99,7 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
     final r = await retryOnFailure(() => repo.getById(widget.recordId!));
     if (r != null && mounted) {
       setState(() {
+        _loadedRecord = r;
         _selectedSmallItemId = r.storageSmallItemId;
         _consumptionDate = r.consumptionDate;
         _quantity = r.quantity;
@@ -100,15 +110,15 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
 
   Future<void> _save() async {
     if (_selectedSmallItemId <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请选择储值小项')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请选择储值小项')));
       return;
     }
     if (_quantity <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('出库数量需大于0')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('出库数量需大于0')));
       return;
     }
 
@@ -124,6 +134,12 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
         consumptionDate: _consumptionDate,
         storageSmallItemId: _selectedSmallItemId,
         quantity: _quantity,
+        sourceStorageRecordId: _loadedRecord?.sourceStorageRecordId,
+        occurredAt: combineInventoryDateAndTime(
+          _consumptionDate,
+          _loadedRecord?.occurredAt,
+        ),
+        occurredAtEstimated: _loadedRecord?.occurredAtEstimated ?? false,
         remark: _remarkController.text.trim().isEmpty
             ? null
             : _remarkController.text.trim(),
@@ -137,9 +153,9 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
 
       if (mounted) {
         context.read<DataRefreshNotifier>().invalidateInventory();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('保存成功')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('保存成功')));
         context.pop();
       }
     } catch (e) {
@@ -152,34 +168,100 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
     }
   }
 
-  bool get _isFromContext => widget.initialSmallItemId != null && widget.initialSmallItemName != null;
+  bool get _isFromContext =>
+      widget.initialSmallItemId != null && widget.initialSmallItemName != null;
+
+  Future<void> _voidRecord() async {
+    final record = _loadedRecord;
+    if (record == null || record.isVoided) return;
+    final reason = await showInventoryVoidDialog(
+      context,
+      title: '撤销出库',
+      impact: '撤销后库存将回加 ${record.quantity} 件。关联的客户储值记录不会自动撤销。',
+    );
+    if (reason == null || !mounted) return;
+    setState(() => _loading = true);
+    try {
+      final voided = await context
+          .read<InventoryConsumptionRepository>()
+          .voidRecord(record.id, reason: reason);
+      if (!mounted) return;
+      setState(() {
+        _loadedRecord = voided;
+        _isEditing = false;
+        _loading = false;
+      });
+      context.read<DataRefreshNotifier>().invalidateInventory();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已撤销出库，操作记录已保留')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = toUserFriendlyError(error);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final isEdit = widget.recordId != null;
+    final isVoided = _loadedRecord?.isVoided ?? false;
     final title = isEdit
-        ? '编辑出库'
+        ? (_isEditing ? '编辑出库' : '出库详情')
         : (_isFromContext ? '为「${widget.initialSmallItemName}」出库' : '新增出库');
 
     return Scaffold(
       appBar: AppBar(
         title: Text(title),
         actions: [
-          TextButton(
-            onPressed: _loading ? null : _save,
-            child: _loading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('保存'),
-          ),
+          if (isEdit && !_isEditing)
+            TextButton.icon(
+              onPressed: isVoided
+                  ? null
+                  : () => setState(() => _isEditing = true),
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('编辑'),
+            )
+          else
+            TextButton(
+              onPressed: _loading ? null : _save,
+              child: _loading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('保存'),
+            ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (isEdit && !_isEditing) ...[
+            Card(
+              color: isVoided
+                  ? Theme.of(context).colorScheme.errorContainer
+                  : Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: ListTile(
+                leading: Icon(
+                  isVoided
+                      ? Icons.history_toggle_off
+                      : Icons.visibility_outlined,
+                ),
+                title: Text(isVoided ? '该记录已撤销' : '当前为浏览态'),
+                subtitle: Text(
+                  isVoided
+                      ? '撤销时间：${formatInventoryAuditTime(_loadedRecord!.voidedAt!)}\n'
+                            '撤销原因：${_loadedRecord!.voidReason ?? '未填写'}'
+                      : '如需调整，请点击右上角“编辑”',
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           if (_error != null) ...[
             Text(_error!, style: const TextStyle(color: Colors.red)),
             const SizedBox(height: 16),
@@ -192,20 +274,36 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
                 children: [
                   if (_isFromContext)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
+                      ),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.surfaceContainerHighest.withOpacity(0.5),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.inventory_2_outlined, size: 20, color: Theme.of(context).colorScheme.primary),
+                          Icon(
+                            Icons.inventory_2_outlined,
+                            size: 20,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
                           const SizedBox(width: 12),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('小项', style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.grey)),
-                              Text(widget.initialSmallItemName!, style: Theme.of(context).textTheme.titleMedium),
+                              Text(
+                                '小项',
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(color: Colors.grey),
+                              ),
+                              Text(
+                                widget.initialSmallItemName!,
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
                             ],
                           ),
                         ],
@@ -213,29 +311,41 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
                     )
                   else
                     DropdownButtonFormField<int>(
-                      value: _smallItemOptions.any((o) => o.id == _selectedSmallItemId)
+                      value:
+                          _smallItemOptions.any(
+                            (o) => o.id == _selectedSmallItemId,
+                          )
                           ? _selectedSmallItemId
                           : (_smallItemOptions.isNotEmpty
-                              ? _smallItemOptions.first.id
-                              : null),
+                                ? _smallItemOptions.first.id
+                                : null),
                       decoration: const InputDecoration(labelText: '储值小项'),
                       items: _smallItemOptions
-                          .map((o) => DropdownMenuItem(
-                                value: o.id,
-                                child: Text(o.name),
-                              ))
+                          .map(
+                            (o) => DropdownMenuItem(
+                              value: o.id,
+                              child: Text(o.name),
+                            ),
+                          )
                           .toList(),
-                      onChanged: (v) {
-                        if (v != null) setState(() => _selectedSmallItemId = v);
-                      },
+                      onChanged: !_isEditing
+                          ? null
+                          : (v) {
+                              if (v != null)
+                                setState(() => _selectedSmallItemId = v);
+                            },
                     ),
                   const SizedBox(height: 16),
                   Row(
                     children: [
-                      Text('数量', style: Theme.of(context).textTheme.titleMedium),
+                      Text(
+                        '数量',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
                       const SizedBox(width: 16),
                       QuantityStepper(
                         value: _quantity,
+                        enabled: _isEditing,
                         onChanged: (v) => setState(() => _quantity = v),
                       ),
                     ],
@@ -248,20 +358,21 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
                       '${_consumptionDate.year}-${_consumptionDate.month.toString().padLeft(2, '0')}-${_consumptionDate.day.toString().padLeft(2, '0')}',
                     ),
                     trailing: const Icon(Icons.calendar_today),
-                    onTap: () async {
-                      final d = await showDatePicker(
-                        context: context,
-                        initialDate: _consumptionDate,
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime.now().add(const Duration(days: 365)),
-                        locale: const Locale('zh', 'CN'),
-                      );
-                      if (d != null) setState(() => _consumptionDate = d);
-                    },
+                    onTap: !_isEditing
+                        ? null
+                        : () async {
+                            final d = await pickInventoryBusinessDate(
+                              context,
+                              current: _consumptionDate,
+                              warnAboutReordering: isEdit,
+                            );
+                            if (d != null) setState(() => _consumptionDate = d);
+                          },
                   ),
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _remarkController,
+                    enabled: _isEditing,
                     decoration: const InputDecoration(
                       labelText: '备注',
                       hintText: '可选',
@@ -272,6 +383,17 @@ class _InventorySuppOutEditScreenState extends State<InventorySuppOutEditScreen>
               ),
             ),
           ),
+          if (isEdit && !_isEditing && !isVoided) ...[
+            const SizedBox(height: 20),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.error,
+              ),
+              onPressed: _loading ? null : _voidRecord,
+              icon: const Icon(Icons.undo),
+              label: const Text('撤销出库并保留记录'),
+            ),
+          ],
         ],
       ),
     );

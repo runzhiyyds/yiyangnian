@@ -177,12 +177,21 @@ class AppRouter {
         },
       ),
       GoRoute(
+        path: '/inventory/supp-in/:id',
+        builder: (context, state) {
+          final id = int.tryParse(state.pathParameters['id'] ?? '');
+          if (id == null)
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          return InventorySuppInEditScreen(recordId: id, initialReadOnly: true);
+        },
+      ),
+      GoRoute(
         path: '/inventory/supp-in/:id/edit',
         builder: (context, state) {
           final id = int.tryParse(state.pathParameters['id'] ?? '');
           if (id == null)
             return const _InvalidParamRedirect(to: '/home/inventory');
-          return InventorySuppInEditScreen(recordId: id);
+          return InventorySuppInEditScreen(recordId: id, initialReadOnly: true);
         },
       ),
       GoRoute(
@@ -198,12 +207,27 @@ class AppRouter {
         },
       ),
       GoRoute(
+        path: '/inventory/supp-out/:id',
+        builder: (context, state) {
+          final id = int.tryParse(state.pathParameters['id'] ?? '');
+          if (id == null)
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          return InventorySuppOutEditScreen(
+            recordId: id,
+            initialReadOnly: true,
+          );
+        },
+      ),
+      GoRoute(
         path: '/inventory/supp-out/:id/edit',
         builder: (context, state) {
           final id = int.tryParse(state.pathParameters['id'] ?? '');
           if (id == null)
             return const _InvalidParamRedirect(to: '/home/inventory');
-          return InventorySuppOutEditScreen(recordId: id);
+          return InventorySuppOutEditScreen(
+            recordId: id,
+            initialReadOnly: true,
+          );
         },
       ),
       StatefulShellRoute.indexedStack(

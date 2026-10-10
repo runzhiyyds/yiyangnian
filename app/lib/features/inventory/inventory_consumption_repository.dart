@@ -13,23 +13,33 @@ class InventoryConsumptionRepository {
         .from('inventory_consumption_records')
         .select()
         .order('consumption_date', ascending: false)
+        .order('occurred_at', ascending: false)
         .order('id', ascending: false);
     return (res as List)
-        .map((e) => InventoryConsumptionRecordModel.fromJson(
-            Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => InventoryConsumptionRecordModel.fromJson(
+            Map<String, dynamic>.from(e as Map),
+          ),
+        )
         .toList();
   }
 
-  Future<List<InventoryConsumptionRecordModel>> getBySmallItemId(int storageSmallItemId) async {
+  Future<List<InventoryConsumptionRecordModel>> getBySmallItemId(
+    int storageSmallItemId,
+  ) async {
     final res = await _client
         .from('inventory_consumption_records')
         .select()
         .eq('storage_small_item_id', storageSmallItemId)
         .order('consumption_date', ascending: false)
+        .order('occurred_at', ascending: false)
         .order('id', ascending: false);
     return (res as List)
-        .map((e) => InventoryConsumptionRecordModel.fromJson(
-            Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => InventoryConsumptionRecordModel.fromJson(
+            Map<String, dynamic>.from(e as Map),
+          ),
+        )
         .toList();
   }
 
@@ -40,22 +50,28 @@ class InventoryConsumptionRepository {
         .eq('id', id)
         .maybeSingle();
     if (res == null) return null;
-    return InventoryConsumptionRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+    return InventoryConsumptionRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 
   Future<InventoryConsumptionRecordModel> create(
-      InventoryConsumptionRecordModel record) async {
+    InventoryConsumptionRecordModel record,
+  ) async {
     final res = await _client
         .from('inventory_consumption_records')
         .insert(record.toJson())
         .select()
         .single();
-    return InventoryConsumptionRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+    return InventoryConsumptionRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 
   /// 批量插入（新建储值多小项出库时一次往返，避免逐条 await）
   Future<List<InventoryConsumptionRecordModel>> createBatch(
-      List<InventoryConsumptionRecordModel> records) async {
+    List<InventoryConsumptionRecordModel> records,
+  ) async {
     if (records.isEmpty) return [];
     final rows = records.map((r) => r.toJson()).toList();
     final res = await _client
@@ -63,23 +79,47 @@ class InventoryConsumptionRepository {
         .insert(rows)
         .select();
     return (res as List)
-        .map((e) => InventoryConsumptionRecordModel.fromJson(
-            Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => InventoryConsumptionRecordModel.fromJson(
+            Map<String, dynamic>.from(e as Map),
+          ),
+        )
         .toList();
   }
 
   Future<InventoryConsumptionRecordModel> update(
-      InventoryConsumptionRecordModel record) async {
+    InventoryConsumptionRecordModel record,
+  ) async {
     final res = await _client
         .from('inventory_consumption_records')
         .update(record.toJson())
         .eq('id', record.id)
         .select()
         .single();
-    return InventoryConsumptionRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+    return InventoryConsumptionRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 
-  Future<void> delete(int id) async {
-    await _client.from('inventory_consumption_records').delete().eq('id', id);
+  Future<InventoryConsumptionRecordModel> voidRecord(
+    int id, {
+    required String reason,
+  }) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) throw StateError('当前登录已失效，请重新登录');
+    final res = await _client
+        .from('inventory_consumption_records')
+        .update({
+          'voided_at': DateTime.now().toUtc().toIso8601String(),
+          'voided_by': userId,
+          'void_reason': reason.trim(),
+        })
+        .eq('id', id)
+        .isFilter('voided_at', null)
+        .select()
+        .single();
+    return InventoryConsumptionRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 }

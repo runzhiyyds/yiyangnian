@@ -75,14 +75,12 @@ class AccountDataScope {
   static bool isDemoInventorySuppIn(
     InventorySuppInRecordModel r, {
     String? smallItemName,
-  }) =>
-      isDemoRemark(r.remark) || isDemoTagged(smallItemName);
+  }) => isDemoRemark(r.remark) || isDemoTagged(smallItemName);
 
   static bool isDemoInventoryConsumption(
     InventoryConsumptionRecordModel r, {
     String? smallItemName,
-  }) =>
-      isDemoRemark(r.remark) || isDemoTagged(smallItemName);
+  }) => isDemoRemark(r.remark) || isDemoTagged(smallItemName);
 
   static bool isDemoSmallItemOption(StorageSmallItemOption o) =>
       isDemoTagged(o.name);
@@ -93,49 +91,41 @@ class AccountDataScope {
     String? email,
     List<CustomerModel> customers,
   ) =>
-      customers
-          .where((c) => includeForUser(email, isDemoCustomer(c)))
-          .toList();
+      customers.where((c) => includeForUser(email, isDemoCustomer(c))).toList();
 
   static List<StorageRecordModel> filterStorages(
     String? email,
     List<StorageRecordModel> storages,
-  ) =>
-      storages
-          .where((s) => includeForUser(email, isDemoStorage(s)))
-          .toList();
+  ) => storages.where((s) => includeForUser(email, isDemoStorage(s))).toList();
 
   static List<ConsumptionRecordModel> filterConsumptions(
     String? email,
     List<ConsumptionRecordModel> consumptions,
     Map<int, StorageRecordModel> storageMap,
-  ) =>
-      consumptions.where((c) {
-        final storage = storageMap[c.storageRecordId];
-        // 消费编号和进货编号一样来自全局序列；只要父储值记录存在，
-        // 就应以父记录的客户归属为准。编号只用于无法找到父记录的历史兜底。
-        final isDemo = storage != null
-            ? isDemoStorage(storage)
-            : isDemoConsumption(c);
-        return includeForUser(email, isDemo);
-      }).toList();
+  ) => consumptions.where((c) {
+    final storage = storageMap[c.storageRecordId];
+    // 消费编号和进货编号一样来自全局序列；只要父储值记录存在，
+    // 就应以父记录的客户归属为准。编号只用于无法找到父记录的历史兜底。
+    final isDemo = storage != null
+        ? isDemoStorage(storage)
+        : isDemoConsumption(c);
+    return includeForUser(email, isDemo);
+  }).toList();
 
   static List<StorageSmallItemOption> filterSmallItemOptions(
     String? email,
     List<StorageSmallItemOption> options,
-  ) =>
-      options
-          .where((o) => includeForUser(email, isDemoSmallItemOption(o)))
-          .toList();
+  ) => options
+      .where((o) => includeForUser(email, isDemoSmallItemOption(o)))
+      .toList();
 
   static Map<int, String> filterSmallItemNames(
     String? email,
     Map<int, String> names,
-  ) =>
-      {
-        for (final e in names.entries)
-          if (includeForUser(email, isDemoTagged(e.value))) e.key: e.value,
-      };
+  ) => {
+    for (final e in names.entries)
+      if (includeForUser(email, isDemoTagged(e.value))) e.key: e.value,
+  };
 
   static List<InventoryPurchaseRecordModel> filterInventoryPurchases(
     String? email,
@@ -154,27 +144,25 @@ class AccountDataScope {
     String? email,
     List<InventorySuppInRecordModel> records,
     Map<int, String> smallItemNames,
-  ) =>
-      records.where((r) {
-        final isDemo = isDemoInventorySuppIn(
-          r,
-          smallItemName: smallItemNames[r.storageSmallItemId],
-        );
-        return includeForUser(email, isDemo);
-      }).toList();
+  ) => records.where((r) {
+    final isDemo = isDemoInventorySuppIn(
+      r,
+      smallItemName: smallItemNames[r.storageSmallItemId],
+    );
+    return includeForUser(email, isDemo);
+  }).toList();
 
   static List<InventoryConsumptionRecordModel> filterInventoryConsumptions(
     String? email,
     List<InventoryConsumptionRecordModel> records,
     Map<int, String> smallItemNames,
-  ) =>
-      records.where((r) {
-        final isDemo = isDemoInventoryConsumption(
-          r,
-          smallItemName: smallItemNames[r.storageSmallItemId],
-        );
-        return includeForUser(email, isDemo);
-      }).toList();
+  ) => records.where((r) {
+    final isDemo = isDemoInventoryConsumption(
+      r,
+      smallItemName: smallItemNames[r.storageSmallItemId],
+    );
+    return includeForUser(email, isDemo);
+  }).toList();
 
   /// 客户一览：按账号域过滤客户、储值、消费、小项名称
   static ({
@@ -182,7 +170,8 @@ class AccountDataScope {
     Map<String, List<StorageRecordModel>> storagesByCustomer,
     Map<int, List<ConsumptionRecordModel>> consumptionsByStorage,
     Map<int, String> smallItemNames,
-  }) filterTreeScope({
+  })
+  filterTreeScope({
     required String? email,
     required List<CustomerModel> customers,
     required Map<String, List<StorageRecordModel>> storagesByCustomer,
@@ -195,8 +184,7 @@ class AccountDataScope {
     final scopedStorages = <String, List<StorageRecordModel>>{};
     for (final name in scopedNames) {
       final list = storagesByCustomer[name] ?? [];
-      scopedStorages[name] =
-          filterStorages(email, list);
+      scopedStorages[name] = filterStorages(email, list);
     }
 
     final scopedStorageIds = scopedStorages.values
@@ -244,7 +232,8 @@ class AccountDataScope {
     List<InventoryConsumptionRecordModel> consumptions,
     List<StorageSmallItemOption> smallOptions,
     Map<int, String> smallItemNames,
-  }) scopeInventoryRaw({
+  })
+  scopeInventoryRaw({
     required String? email,
     required List<InventoryPurchaseRecordModel> purchases,
     required List<InventorySuppInRecordModel> suppIn,
@@ -289,11 +278,14 @@ class AccountDataScope {
       balanceBySmallItem.putIfAbsent(r.storageSmallItemId, () => 0);
     }
     for (final p in purchases) {
-      for (var i = 0;
-          i < p.storageSmallItemIds.length &&
-              i < p.storageBigItems.length &&
-              i < p.quantities.length;
-          i++) {
+      if (p.isVoided) continue;
+      for (
+        var i = 0;
+        i < p.storageSmallItemIds.length &&
+            i < p.storageBigItems.length &&
+            i < p.quantities.length;
+        i++
+      ) {
         final id = p.storageSmallItemIds[i];
         if (id <= 0) continue;
         balanceBySmallItem[id] =
@@ -301,10 +293,12 @@ class AccountDataScope {
       }
     }
     for (final r in suppIn) {
+      if (r.isVoided) continue;
       balanceBySmallItem[r.storageSmallItemId] =
           (balanceBySmallItem[r.storageSmallItemId] ?? 0) + r.quantity;
     }
     for (final r in consumptions) {
+      if (r.isVoided) continue;
       balanceBySmallItem[r.storageSmallItemId] =
           (balanceBySmallItem[r.storageSmallItemId] ?? 0) - r.quantity;
     }

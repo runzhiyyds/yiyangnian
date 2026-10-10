@@ -12,23 +12,33 @@ class InventorySuppInRepository {
         .from('inventory_supplementary_in_records')
         .select()
         .order('supplement_date', ascending: false)
+        .order('occurred_at', ascending: false)
         .order('id', ascending: false);
     return (res as List)
-        .map((e) =>
-            InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => InventorySuppInRecordModel.fromJson(
+            Map<String, dynamic>.from(e as Map),
+          ),
+        )
         .toList();
   }
 
-  Future<List<InventorySuppInRecordModel>> getBySmallItemId(int storageSmallItemId) async {
+  Future<List<InventorySuppInRecordModel>> getBySmallItemId(
+    int storageSmallItemId,
+  ) async {
     final res = await _client
         .from('inventory_supplementary_in_records')
         .select()
         .eq('storage_small_item_id', storageSmallItemId)
         .order('supplement_date', ascending: false)
+        .order('occurred_at', ascending: false)
         .order('id', ascending: false);
     return (res as List)
-        .map((e) =>
-            InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => InventorySuppInRecordModel.fromJson(
+            Map<String, dynamic>.from(e as Map),
+          ),
+        )
         .toList();
   }
 
@@ -39,29 +49,57 @@ class InventorySuppInRepository {
         .eq('id', id)
         .maybeSingle();
     if (res == null) return null;
-    return InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+    return InventorySuppInRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 
-  Future<InventorySuppInRecordModel> create(InventorySuppInRecordModel record) async {
+  Future<InventorySuppInRecordModel> create(
+    InventorySuppInRecordModel record,
+  ) async {
     final res = await _client
         .from('inventory_supplementary_in_records')
         .insert(record.toJson())
         .select()
         .single();
-    return InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+    return InventorySuppInRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 
-  Future<InventorySuppInRecordModel> update(InventorySuppInRecordModel record) async {
+  Future<InventorySuppInRecordModel> update(
+    InventorySuppInRecordModel record,
+  ) async {
     final res = await _client
         .from('inventory_supplementary_in_records')
         .update(record.toJson())
         .eq('id', record.id)
         .select()
         .single();
-    return InventorySuppInRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+    return InventorySuppInRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 
-  Future<void> delete(int id) async {
-    await _client.from('inventory_supplementary_in_records').delete().eq('id', id);
+  Future<InventorySuppInRecordModel> voidRecord(
+    int id, {
+    required String reason,
+  }) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) throw StateError('当前登录已失效，请重新登录');
+    final res = await _client
+        .from('inventory_supplementary_in_records')
+        .update({
+          'voided_at': DateTime.now().toUtc().toIso8601String(),
+          'voided_by': userId,
+          'void_reason': reason.trim(),
+        })
+        .eq('id', id)
+        .isFilter('voided_at', null)
+        .select()
+        .single();
+    return InventorySuppInRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 }

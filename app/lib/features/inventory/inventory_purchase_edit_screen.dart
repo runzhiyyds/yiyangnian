@@ -14,6 +14,7 @@ import '../storage_options/storage_small_item_repository.dart';
 import 'inventory_models.dart';
 import 'inventory_purchase_repository.dart';
 import 'widgets/quantity_stepper.dart';
+import 'widgets/inventory_void_dialog.dart';
 
 class InventoryPurchaseEditScreen extends StatefulWidget {
   const InventoryPurchaseEditScreen({
@@ -51,6 +52,7 @@ class _InventoryPurchaseEditScreenState
   bool _loading = false;
   late bool _isEditing;
   String? _error;
+  InventoryPurchaseRecordModel? _loadedRecord;
 
   String _cacheKeyBig(BuildContext context) =>
       DemoMode.inventoryBigOptionsCacheKey(
@@ -477,6 +479,7 @@ class _InventoryPurchaseEditScreenState
     final p = await retryOnFailure(() => repo.getById(widget.purchaseId!));
     if (p != null && mounted) {
       setState(() {
+        _loadedRecord = p;
         _existingCode = p.code;
         _purchaseDate = p.purchaseDate;
         _totalAmountController.text = p.totalAmount.toStringAsFixed(0);
@@ -708,6 +711,11 @@ class _InventoryPurchaseEditScreenState
         storageSmallItemIds: _lines.map((line) => line.smallItemId).toList(),
         quantities: _lines.map((line) => line.quantity).toList(),
         totalAmount: totalAmount,
+        occurredAt: combineInventoryDateAndTime(
+          _purchaseDate,
+          _loadedRecord?.occurredAt,
+        ),
+        occurredAtEstimated: _loadedRecord?.occurredAtEstimated ?? false,
         remark: _remarkController.text.trim().isEmpty
             ? null
             : _remarkController.text.trim(),
@@ -749,9 +757,47 @@ class _InventoryPurchaseEditScreenState
     }
   }
 
+  Future<void> _voidPurchase() async {
+    final record = _loadedRecord;
+    if (record == null || record.isVoided) return;
+    final totalQuantity = record.quantities.fold<int>(
+      0,
+      (sum, quantity) => sum + quantity,
+    );
+    final reason = await showInventoryVoidDialog(
+      context,
+      title: '撤销进货单',
+      impact: '撤销后，本单 ${record.itemCount} 种商品、共 $totalQuantity 件将从库存中扣回。',
+    );
+    if (reason == null || !mounted) return;
+    setState(() => _loading = true);
+    try {
+      final voided = await context
+          .read<InventoryPurchaseRepository>()
+          .voidRecord(record.id, reason: reason);
+      if (!mounted) return;
+      setState(() {
+        _loadedRecord = voided;
+        _isEditing = false;
+        _loading = false;
+      });
+      context.read<DataRefreshNotifier>().invalidateInventory();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已撤销进货单，操作记录已保留')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = toUserFriendlyError(error);
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isExisting = widget.purchaseId != null;
+    final isVoided = _loadedRecord?.isVoided ?? false;
 
     return Scaffold(
       appBar: AppBar(
@@ -759,7 +805,7 @@ class _InventoryPurchaseEditScreenState
         actions: [
           if (isExisting && !_isEditing)
             TextButton.icon(
-              onPressed: _hasLineDataMismatch
+              onPressed: _hasLineDataMismatch || isVoided
                   ? null
                   : () => setState(() => _isEditing = true),
               icon: const Icon(Icons.edit_outlined, size: 18),
@@ -785,11 +831,22 @@ class _InventoryPurchaseEditScreenState
           children: [
             if (isExisting && !_isEditing) ...[
               Card(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                child: const ListTile(
-                  leading: Icon(Icons.visibility_outlined),
-                  title: Text('当前为浏览态'),
-                  subtitle: Text('内容不可修改；如需调整，请点击右上角“编辑”'),
+                color: isVoided
+                    ? Theme.of(context).colorScheme.errorContainer
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: ListTile(
+                  leading: Icon(
+                    isVoided
+                        ? Icons.history_toggle_off
+                        : Icons.visibility_outlined,
+                  ),
+                  title: Text(isVoided ? '该进货单已撤销' : '当前为浏览态'),
+                  subtitle: Text(
+                    isVoided
+                        ? '撤销时间：${formatInventoryAuditTime(_loadedRecord!.voidedAt!)}\n'
+                              '撤销原因：${_loadedRecord!.voidReason ?? '未填写'}'
+                        : '内容不可修改；如需调整，请点击右上角“编辑”',
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
@@ -830,14 +887,10 @@ class _InventoryPurchaseEditScreenState
                       onTap: !_isEditing
                           ? null
                           : () async {
-                              final d = await showDatePicker(
-                                context: context,
-                                initialDate: _purchaseDate,
-                                firstDate: DateTime(2020),
-                                lastDate: DateTime.now().add(
-                                  const Duration(days: 365),
-                                ),
-                                locale: const Locale('zh', 'CN'),
+                              final d = await pickInventoryBusinessDate(
+                                context,
+                                current: _purchaseDate,
+                                warnAboutReordering: isExisting,
                               );
                               if (d != null) setState(() => _purchaseDate = d);
                             },
@@ -1004,6 +1057,17 @@ class _InventoryPurchaseEditScreenState
                 ),
               ),
             ),
+            if (isExisting && !_isEditing && !isVoided) ...[
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                ),
+                onPressed: _loading ? null : _voidPurchase,
+                icon: const Icon(Icons.undo),
+                label: const Text('撤销进货并保留记录'),
+              ),
+            ],
           ],
         ),
       ),

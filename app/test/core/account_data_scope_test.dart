@@ -184,4 +184,42 @@ void main() {
       );
     });
   });
+
+  test('voided inventory records no longer affect current balance', () {
+    final balance = AccountDataScope.computeInventoryBalances(
+      purchases: [
+        InventoryPurchaseRecordModel(
+          id: 701,
+          code: 'JH00701',
+          purchaseDate: DateTime(2026, 10, 1),
+          storageBigItems: const ['正式大项'],
+          storageSmallItemIds: const [22],
+          quantities: const [10],
+          voidedAt: DateTime(2026, 10, 2),
+          voidReason: '重复录入',
+        ),
+      ],
+      suppIn: [
+        InventorySuppInRecordModel(
+          id: 702,
+          supplementDate: DateTime(2026, 10, 1),
+          storageSmallItemId: 22,
+          quantity: 8,
+        ),
+      ],
+      consumptions: [
+        InventoryConsumptionRecordModel(
+          id: 703,
+          consumptionDate: DateTime(2026, 10, 2),
+          storageSmallItemId: 22,
+          quantity: 3,
+          voidedAt: DateTime(2026, 10, 3),
+          voidReason: '客户取消',
+        ),
+      ],
+      smallOptions: [StorageSmallItemOption(id: 22, name: '正式小项')],
+    );
+
+    expect(balance[22], 8);
+  });
 }

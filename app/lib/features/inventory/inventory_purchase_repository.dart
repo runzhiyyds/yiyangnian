@@ -17,10 +17,14 @@ class InventoryPurchaseRepository {
         .from('inventory_purchase_records')
         .select()
         .order('purchase_date', ascending: false)
+        .order('occurred_at', ascending: false)
         .order('id', ascending: false);
     return (res as List)
-        .map((e) =>
-            InventoryPurchaseRecordModel.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => InventoryPurchaseRecordModel.fromJson(
+            Map<String, dynamic>.from(e as Map),
+          ),
+        )
         .toList();
   }
 
@@ -40,10 +44,14 @@ class InventoryPurchaseRepository {
         .gte('purchase_date', dateOnly(start))
         .lte('purchase_date', dateOnly(end))
         .order('purchase_date', ascending: false)
+        .order('occurred_at', ascending: false)
         .order('id', ascending: false);
     return (res as List)
-        .map((e) => InventoryPurchaseRecordModel.fromJson(
-            Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => InventoryPurchaseRecordModel.fromJson(
+            Map<String, dynamic>.from(e as Map),
+          ),
+        )
         .toList();
   }
 
@@ -54,10 +62,14 @@ class InventoryPurchaseRepository {
         .eq('id', id)
         .maybeSingle();
     if (res == null) return null;
-    return InventoryPurchaseRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+    return InventoryPurchaseRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 
-  Future<InventoryPurchaseRecordModel> create(InventoryPurchaseRecordModel record) async {
+  Future<InventoryPurchaseRecordModel> create(
+    InventoryPurchaseRecordModel record,
+  ) async {
     final code = await generatePurchaseCode();
     final data = record.toJson();
     data['code'] = code;
@@ -66,20 +78,44 @@ class InventoryPurchaseRepository {
         .insert(data)
         .select()
         .single();
-    return InventoryPurchaseRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+    return InventoryPurchaseRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 
-  Future<InventoryPurchaseRecordModel> update(InventoryPurchaseRecordModel record) async {
+  Future<InventoryPurchaseRecordModel> update(
+    InventoryPurchaseRecordModel record,
+  ) async {
     final res = await _client
         .from('inventory_purchase_records')
         .update(record.toJson())
         .eq('id', record.id)
         .select()
         .single();
-    return InventoryPurchaseRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
+    return InventoryPurchaseRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 
-  Future<void> delete(int id) async {
-    await _client.from('inventory_purchase_records').delete().eq('id', id);
+  Future<InventoryPurchaseRecordModel> voidRecord(
+    int id, {
+    required String reason,
+  }) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) throw StateError('当前登录已失效，请重新登录');
+    final res = await _client
+        .from('inventory_purchase_records')
+        .update({
+          'voided_at': DateTime.now().toUtc().toIso8601String(),
+          'voided_by': userId,
+          'void_reason': reason.trim(),
+        })
+        .eq('id', id)
+        .isFilter('voided_at', null)
+        .select()
+        .single();
+    return InventoryPurchaseRecordModel.fromJson(
+      Map<String, dynamic>.from(res as Map),
+    );
   }
 }
