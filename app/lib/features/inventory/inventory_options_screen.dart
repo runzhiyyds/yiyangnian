@@ -713,6 +713,15 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
     });
   }
 
+  Future<void> _openLinkedStorages(int smallId, String smallItemName) async {
+    final uri = Uri(
+      path: '/inventory/item/$smallId/storages',
+      queryParameters: {'name': smallItemName},
+    );
+    await context.push(uri.toString());
+    if (mounted) await _load();
+  }
+
   Widget _buildLinkedDetailPane(BuildContext context) {
     final smallId = _selectedSmallId;
     if (smallId == null) {
@@ -857,17 +866,11 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
             children: [
-              InventoryLinkedStorages(
-                storages: storages,
-                maxVisible: 5,
-                onTap: (storage) => context
-                    .push('/storage/${storage.id}')
-                    .then((_) => mounted ? _load() : null),
-                onViewAll: () => context
-                    .push('/inventory/item/$smallId')
-                    .then((_) => mounted ? _load() : null),
+              InventoryLinkedStoragesEntry(
+                count: storages.length,
+                onTap: () => _openLinkedStorages(smallId, optVal.name),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(

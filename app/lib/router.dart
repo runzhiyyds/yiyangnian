@@ -18,6 +18,7 @@ import 'features/settings/settings_screen.dart';
 import 'features/inventory/inventory_options_screen.dart';
 import 'features/inventory/inventory_purchase_edit_screen.dart';
 import 'features/inventory/inventory_item_detail_screen.dart';
+import 'features/inventory/inventory_linked_storages_screen.dart';
 import 'features/inventory/inventory_supp_in_edit_screen.dart';
 import 'features/inventory/inventory_supp_out_edit_screen.dart';
 
@@ -152,6 +153,19 @@ class AppRouter {
           return InventoryPurchaseEditScreen(
             purchaseId: id,
             initialReadOnly: true,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/inventory/item/:smallItemId/storages',
+        builder: (context, state) {
+          final id = int.tryParse(state.pathParameters['smallItemId'] ?? '');
+          if (id == null) {
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          }
+          return InventoryLinkedStoragesScreen(
+            smallItemId: id,
+            initialSmallItemName: state.uri.queryParameters['name'],
           );
         },
       ),

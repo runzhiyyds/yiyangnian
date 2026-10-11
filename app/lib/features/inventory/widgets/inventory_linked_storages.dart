@@ -9,12 +9,16 @@ class InventoryLinkedStorages extends StatelessWidget {
     required this.onTap,
     this.maxVisible,
     this.onViewAll,
+    this.showHeader = true,
+    this.emptyText = '暂无关联储值',
   });
 
   final List<StorageRecordModel> storages;
   final ValueChanged<StorageRecordModel> onTap;
   final int? maxVisible;
   final VoidCallback? onViewAll;
+  final bool showHeader;
+  final String emptyText;
 
   @override
   Widget build(BuildContext context) {
@@ -26,30 +30,32 @@ class InventoryLinkedStorages extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                '关联储值',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+        if (showHeader) ...[
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '关联储值',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
               ),
-            ),
-            Text(
-              '${storages.length}条',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(
-          '包含当前小项的客户储值记录',
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context).colorScheme.outline,
+              Text(
+                '${storages.length}条',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
           ),
-        ),
-        const SizedBox(height: 8),
+          const SizedBox(height: 4),
+          Text(
+            '包含当前小项的客户储值记录',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.outline,
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
         if (storages.isEmpty)
           Container(
             width: double.infinity,
@@ -59,7 +65,7 @@ class InventoryLinkedStorages extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
-              '暂无关联储值',
+              emptyText,
               textAlign: TextAlign.center,
               style: TextStyle(color: Theme.of(context).colorScheme.outline),
             ),
@@ -89,6 +95,40 @@ class InventoryLinkedStorages extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+class InventoryLinkedStoragesEntry extends StatelessWidget {
+  const InventoryLinkedStoragesEntry({
+    super.key,
+    required this.count,
+    required this.onTap,
+  });
+
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+          child: Icon(
+            Icons.account_balance_wallet_outlined,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        title: const Text(
+          '关联储值',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(count == 0 ? '暂无记录，点击查询' : '共 $count 条，点击查询'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      ),
     );
   }
 }

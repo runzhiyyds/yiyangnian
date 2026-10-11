@@ -52,4 +52,28 @@ void main() {
     expect(find.text('0条'), findsOneWidget);
     expect(find.text('暂无关联储值'), findsOneWidget);
   });
+
+  testWidgets(
+    'compact entry exposes the query capability without a flat list',
+    (tester) async {
+      var opened = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: InventoryLinkedStoragesEntry(
+              count: 12,
+              onTap: () => opened = true,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('关联储值'), findsOneWidget);
+      expect(find.text('共 12 条，点击查询'), findsOneWidget);
+      expect(find.text('王女士'), findsNothing);
+
+      await tester.tap(find.text('关联储值'));
+      expect(opened, isTrue);
+    },
+  );
 }

@@ -205,6 +205,17 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
     await _load();
   }
 
+  Future<void> _openLinkedStorages() async {
+    final uri = Uri(
+      path: '/inventory/item/${widget.smallItemId}/storages',
+      queryParameters: {'name': _smallItemName},
+    );
+    await context.push(uri.toString());
+    if (!mounted) return;
+    context.read<DataCache>().remove(_cacheKey(context));
+    await _load();
+  }
+
   Future<void> _openNew(String path) async {
     final uri = Uri(
       path: path,
@@ -296,11 +307,11 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
               ),
             ),
             const SizedBox(height: 18),
-            InventoryLinkedStorages(
-              storages: _linkedStorages,
-              onTap: (storage) => _openSourceStorage(storage.id),
+            InventoryLinkedStoragesEntry(
+              count: _linkedStorages.length,
+              onTap: _openLinkedStorages,
             ),
-            const SizedBox(height: 22),
+            const SizedBox(height: 18),
             Row(
               children: [
                 Expanded(
