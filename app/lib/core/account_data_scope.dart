@@ -267,17 +267,6 @@ class AccountDataScope {
       balanceBySmallItem[o.id] = 0;
     }
     for (final p in purchases) {
-      for (final id in p.storageSmallItemIds) {
-        balanceBySmallItem.putIfAbsent(id, () => 0);
-      }
-    }
-    for (final r in suppIn) {
-      balanceBySmallItem.putIfAbsent(r.storageSmallItemId, () => 0);
-    }
-    for (final r in consumptions) {
-      balanceBySmallItem.putIfAbsent(r.storageSmallItemId, () => 0);
-    }
-    for (final p in purchases) {
       if (p.isVoided) continue;
       for (
         var i = 0;
@@ -287,20 +276,23 @@ class AccountDataScope {
         i++
       ) {
         final id = p.storageSmallItemIds[i];
-        if (id <= 0) continue;
-        balanceBySmallItem[id] =
-            (balanceBySmallItem[id] ?? 0) + p.quantities[i];
+        // 旧版允许删除仍被历史进货单引用的小项。原记录继续展示，但已删除
+        // 商品不能重新出现在当前库存中，也不能凭残留 ID 恢复余额。
+        if (id <= 0 || !balanceBySmallItem.containsKey(id)) continue;
+        balanceBySmallItem[id] = balanceBySmallItem[id]! + p.quantities[i];
       }
     }
     for (final r in suppIn) {
       if (r.isVoided) continue;
+      if (!balanceBySmallItem.containsKey(r.storageSmallItemId)) continue;
       balanceBySmallItem[r.storageSmallItemId] =
-          (balanceBySmallItem[r.storageSmallItemId] ?? 0) + r.quantity;
+          balanceBySmallItem[r.storageSmallItemId]! + r.quantity;
     }
     for (final r in consumptions) {
       if (r.isVoided) continue;
+      if (!balanceBySmallItem.containsKey(r.storageSmallItemId)) continue;
       balanceBySmallItem[r.storageSmallItemId] =
-          (balanceBySmallItem[r.storageSmallItemId] ?? 0) - r.quantity;
+          balanceBySmallItem[r.storageSmallItemId]! - r.quantity;
     }
     return balanceBySmallItem;
   }

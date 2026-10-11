@@ -222,4 +222,34 @@ void main() {
 
     expect(balance[22], 8);
   });
+
+  test('deleted legacy items stay in history but do not restore stock', () {
+    final balance = AccountDataScope.computeInventoryBalances(
+      purchases: [
+        InventoryPurchaseRecordModel(
+          id: 801,
+          code: 'JH00016',
+          purchaseDate: DateTime(2026, 3, 10),
+          storageBigItems: const ['御至宝'],
+          storageSmallItemIds: const [41],
+          quantities: const [16],
+          remark: '旧库存',
+        ),
+        InventoryPurchaseRecordModel(
+          id: 802,
+          code: 'JH00802',
+          purchaseDate: DateTime(2026, 10, 10),
+          storageBigItems: const ['御至宝'],
+          storageSmallItemIds: const [22],
+          quantities: const [5],
+        ),
+      ],
+      suppIn: const [],
+      consumptions: const [],
+      smallOptions: [StorageSmallItemOption(id: 22, name: '当前商品')],
+    );
+
+    expect(balance, {22: 5});
+    expect(balance.containsKey(41), isFalse);
+  });
 }

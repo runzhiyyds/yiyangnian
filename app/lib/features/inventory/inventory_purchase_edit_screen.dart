@@ -49,6 +49,9 @@ class _InventoryPurchaseEditScreenState
   final List<_PurchaseLineDraft> _lines = [];
   int _activeLineIndex = 0;
   bool _hasLineDataMismatch = false;
+  bool _optionsLoaded = false;
+  bool _purchaseLoaded = false;
+  Set<int> _legacyMissingSmallItemIds = const {};
   bool _loading = false;
   late bool _isEditing;
   String? _error;
@@ -101,7 +104,29 @@ class _InventoryPurchaseEditScreenState
     for (final option in _smallItemOptions) {
       if (option.id == id) return option.name;
     }
-    return '小项 #$id';
+    if (!_optionsLoaded) return '正在加载商品…';
+    if (_loadedRecord?.storageSmallItemIds.contains(id) ?? false) {
+      return '历史商品（已删除，原 ID $id）';
+    }
+    return '未知商品（ID $id）';
+  }
+
+  bool _isLegacyMissingSmallItem(int id) =>
+      _legacyMissingSmallItemIds.contains(id);
+
+  bool get _hasLegacyMissingSmallItems => _legacyMissingSmallItemIds.isNotEmpty;
+
+  void _refreshLegacyMissingSmallItemIds() {
+    if (!_optionsLoaded || !_purchaseLoaded) return;
+    final record = _loadedRecord;
+    if (record == null) {
+      _legacyMissingSmallItemIds = const {};
+      return;
+    }
+    final validIds = _smallItemOptions.map((item) => item.id).toSet();
+    _legacyMissingSmallItemIds = record.storageSmallItemIds
+        .where((id) => !validIds.contains(id))
+        .toSet();
   }
 
   void _writeActiveLineFromEditor() {
@@ -203,6 +228,7 @@ class _InventoryPurchaseEditScreenState
       setState(() {
         _bigItemOptions = bigList;
         _smallItemOptions = smallList;
+        _optionsLoaded = true;
         if (_bigItemName.isEmpty && bigList.isNotEmpty) {
           _bigItemName = bigList.first.name;
         }
@@ -221,8 +247,14 @@ class _InventoryPurchaseEditScreenState
           _smallItemId = underBig.first.id;
         } else if (_smallItemId != 0 &&
             !underBig.any((s) => s.id == _smallItemId)) {
-          _smallItemId = underBig.isNotEmpty ? underBig.first.id : 0;
+          final isLoadedHistoricalSelection =
+              widget.purchaseId != null &&
+              _lines.any((line) => line.smallItemId == _smallItemId);
+          if (!isLoadedHistoricalSelection) {
+            _smallItemId = underBig.isNotEmpty ? underBig.first.id : 0;
+          }
         }
+        _refreshLegacyMissingSmallItemIds();
         _ensureInitialLine();
       });
     }
@@ -480,6 +512,7 @@ class _InventoryPurchaseEditScreenState
     if (p != null && mounted) {
       setState(() {
         _loadedRecord = p;
+        _purchaseLoaded = true;
         _existingCode = p.code;
         _purchaseDate = p.purchaseDate;
         _totalAmountController.text = p.totalAmount.toStringAsFixed(0);
@@ -503,6 +536,7 @@ class _InventoryPurchaseEditScreenState
         } else if (!_hasLineDataMismatch) {
           _ensureInitialLine();
         }
+        _refreshLegacyMissingSmallItemIds();
       });
     }
   }
@@ -546,6 +580,20 @@ class _InventoryPurchaseEditScreenState
         children: [
           const Divider(height: 1),
           const SizedBox(height: 16),
+          if (_isLegacyMissingSmallItem(_smallItemId)) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                '原小项已被删除。可以保留本行并修改日期、金额或备注；如需修改商品或数量，请先重新选择一个当前商品。',
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           const _PurchaseStepLabel(
             step: 1,
             title: '选择商品大项',
@@ -650,7 +698,7 @@ class _InventoryPurchaseEditScreenState
             children: [
               QuantityStepper(
                 value: _quantity,
-                enabled: _isEditing,
+                enabled: _isEditing && !_isLegacyMissingSmallItem(_smallItemId),
                 onChanged: (value) => setState(() {
                   _quantity = value;
                   _writeActiveLineFromEditor();
@@ -673,6 +721,25 @@ class _InventoryPurchaseEditScreenState
       return;
     }
     _writeActiveLineFromEditor();
+    final storageBigItems = _lines.map((line) => line.bigItemName).toList();
+    final smallItemIds = _lines.map((line) => line.smallItemId).toList();
+    final quantities = _lines.map((line) => line.quantity).toList();
+    final original = _loadedRecord;
+    final stillContainsDeletedItem = smallItemIds.any(
+      _isLegacyMissingSmallItem,
+    );
+    final changedLegacyProductLines =
+        original != null &&
+        stillContainsDeletedItem &&
+        (!_sameList(storageBigItems, original.storageBigItems) ||
+            !_sameList(smallItemIds, original.storageSmallItemIds) ||
+            !_sameList(quantities, original.quantities));
+    if (changedLegacyProductLines) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('历史商品已被删除；修改商品或数量前，请先为每条已删除商品重新选择当前商品')),
+      );
+      return;
+    }
     if (_lines.isEmpty || _lines.any((line) => line.smallItemId <= 0)) {
       ScaffoldMessenger.of(
         context,
@@ -685,7 +752,6 @@ class _InventoryPurchaseEditScreenState
       ).showSnackBar(const SnackBar(content: Text('每条进货明细的数量都必须大于 0')));
       return;
     }
-    final smallItemIds = _lines.map((line) => line.smallItemId).toList();
     if (smallItemIds.toSet().length != smallItemIds.length) {
       ScaffoldMessenger.of(
         context,
@@ -707,9 +773,9 @@ class _InventoryPurchaseEditScreenState
         id: widget.purchaseId ?? 0,
         code: widget.purchaseId != null ? _existingCode : '',
         purchaseDate: _purchaseDate,
-        storageBigItems: _lines.map((line) => line.bigItemName).toList(),
-        storageSmallItemIds: _lines.map((line) => line.smallItemId).toList(),
-        quantities: _lines.map((line) => line.quantity).toList(),
+        storageBigItems: storageBigItems,
+        storageSmallItemIds: smallItemIds,
+        quantities: quantities,
         totalAmount: totalAmount,
         occurredAt: combineInventoryDateAndTime(
           _purchaseDate,
@@ -862,6 +928,19 @@ class _InventoryPurchaseEditScreenState
                   leading: Icon(Icons.warning_amber_rounded),
                   title: Text('该历史进货单的商品数据不完整'),
                   subtitle: Text('大项、小项和数量无法一一对应。为避免继续丢失数据，本记录仅允许浏览。'),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            if (_hasLegacyMissingSmallItems) ...[
+              Card(
+                color: Theme.of(context).colorScheme.tertiaryContainer,
+                child: const ListTile(
+                  leading: Icon(Icons.inventory_2_outlined),
+                  title: Text('包含已删除的历史商品'),
+                  subtitle: Text(
+                    '原小项名称已无法恢复，本单继续保留大项、数量和备注，但这些商品不会重新计入当前库存。日期、金额和备注仍可修改；修改商品或数量前需要重新选择当前商品。',
+                  ),
                 ),
               ),
               const SizedBox(height: 16),

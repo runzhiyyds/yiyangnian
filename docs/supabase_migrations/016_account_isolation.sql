@@ -248,7 +248,11 @@ JOIN storage_big_item_options AS demo_big
 WHERE small_item.id = mapping.small_item_id;
 
 -- 数组字段无法使用普通外键，迁移前先校验历史数据；发现异常则整个事务回滚。
+-- 旧版 APP 曾允许删除仍被进货单引用的小项。此类进货单保留原 ID、分类、数量与备注，
+-- 归正式账号但不重新创建商品，因此不会重新计入当前库存；新记录仍必须引用有效小项。
 DO $$
+DECLARE
+  v_legacy_missing_purchase_item_count INTEGER;
 BEGIN
   IF EXISTS (
     SELECT 1
@@ -275,17 +279,35 @@ BEGIN
     RAISE EXCEPTION '存在引用了其他账号小项的储值记录';
   END IF;
 
+  -- 已存在的小项必须与进货单属于同一账号；找不到的小项属于旧版删除遗留，
+  -- 与真正的跨账号引用分开处理，避免为了通过迁移而伪造商品或库存。
   IF EXISTS (
     SELECT 1
     FROM inventory_purchase_records AS parent
     CROSS JOIN LATERAL unnest(
       COALESCE(parent.storage_small_item_ids, ARRAY[]::INT[])
     ) AS ids(item_id)
-    LEFT JOIN storage_small_item_options AS item
-      ON item.id = ids.item_id AND item.owner_id = parent.owner_id
-    WHERE item.id IS NULL
+    JOIN storage_small_item_options AS item
+      ON item.id = ids.item_id
+    WHERE item.owner_id IS DISTINCT FROM parent.owner_id
   ) THEN
     RAISE EXCEPTION '存在引用了其他账号小项的进货记录';
+  END IF;
+
+  SELECT COUNT(*)
+  INTO v_legacy_missing_purchase_item_count
+  FROM inventory_purchase_records AS parent
+  CROSS JOIN LATERAL unnest(
+    COALESCE(parent.storage_small_item_ids, ARRAY[]::INT[])
+  ) AS ids(item_id)
+  LEFT JOIN storage_small_item_options AS item
+    ON item.id = ids.item_id
+  WHERE item.id IS NULL;
+
+  IF v_legacy_missing_purchase_item_count > 0 THEN
+    RAISE NOTICE
+      '保留 % 条引用已删除小项的历史进货明细；不会恢复为当前库存商品',
+      v_legacy_missing_purchase_item_count;
   END IF;
 
   IF EXISTS (
@@ -374,7 +396,7 @@ ALTER TABLE inventory_supplementary_in_records
   ADD CONSTRAINT inventory_supplementary_in_owner_item_fkey
   FOREIGN KEY (owner_id, storage_small_item_id)
   REFERENCES storage_small_item_options(owner_id, id)
-  ON DELETE CASCADE;
+  ON DELETE RESTRICT;
 
 ALTER TABLE inventory_consumption_records
   DROP CONSTRAINT IF EXISTS inventory_consumption_records_storage_small_item_id_fkey;
@@ -382,7 +404,7 @@ ALTER TABLE inventory_consumption_records
   ADD CONSTRAINT inventory_consumption_owner_item_fkey
   FOREIGN KEY (owner_id, storage_small_item_id)
   REFERENCES storage_small_item_options(owner_id, id)
-  ON DELETE CASCADE;
+  ON DELETE RESTRICT;
 
 ALTER TABLE inventory_consumption_records
   DROP CONSTRAINT IF EXISTS inventory_consumption_records_source_storage_record_id_fkey;
@@ -435,13 +457,25 @@ BEGIN
     RAISE EXCEPTION '进货大项、小项和数量必须一一对应';
   END IF;
 
+  -- 历史进货单可能仍保存已删除小项的原 ID。只要账号和三组商品数组完全未变，
+  -- 允许用户修改日期、金额、备注或执行撤销；一旦修改商品或数量，就必须先
+  -- 选择当前账号下仍存在的小项，防止继续产生新的悬空引用。
+  IF TG_TABLE_NAME = 'inventory_purchase_records'
+    AND TG_OP = 'UPDATE'
+    AND NEW.owner_id IS NOT DISTINCT FROM OLD.owner_id
+    AND NEW.storage_big_items IS NOT DISTINCT FROM OLD.storage_big_items
+    AND NEW.storage_small_item_ids IS NOT DISTINCT FROM OLD.storage_small_item_ids
+    AND NEW.quantities IS NOT DISTINCT FROM OLD.quantities THEN
+    RETURN NEW;
+  END IF;
+
   FOREACH item_id IN ARRAY COALESCE(NEW.storage_small_item_ids, ARRAY[]::INT[])
   LOOP
     IF NOT EXISTS (
       SELECT 1 FROM storage_small_item_options
       WHERE id = item_id AND owner_id = NEW.owner_id
     ) THEN
-      RAISE EXCEPTION '小项 % 不属于当前账号', item_id;
+      RAISE EXCEPTION '小项 % 已删除或不属于当前账号，请重新选择当前商品', item_id;
     END IF;
   END LOOP;
   RETURN NEW;
@@ -459,6 +493,45 @@ CREATE TRIGGER inventory_purchase_validate_owned_items
 BEFORE INSERT OR UPDATE OF owner_id, storage_big_items, storage_small_item_ids, quantities
 ON inventory_purchase_records
 FOR EACH ROW EXECUTE FUNCTION validate_owned_small_item_array();
+
+-- 不能只依赖客户端做“是否有关联记录”的检查。数据库直接阻止删除任何仍被
+-- 业务历史引用的小项，避免进货数组留下孤儿 ID，也避免补充入库/出库被级联删除。
+CREATE OR REPLACE FUNCTION prevent_referenced_small_item_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM storage_records
+    WHERE OLD.id = ANY(COALESCE(storage_small_item_ids, ARRAY[]::INT[]))
+  ) OR EXISTS (
+    SELECT 1 FROM consumption_records
+    WHERE consumption_project_id = OLD.id
+       OR OLD.id = ANY(COALESCE(consumption_project_ids, ARRAY[]::INT[]))
+  ) OR EXISTS (
+    SELECT 1 FROM inventory_purchase_records
+    WHERE OLD.id = ANY(COALESCE(storage_small_item_ids, ARRAY[]::INT[]))
+  ) OR EXISTS (
+    SELECT 1 FROM inventory_supplementary_in_records
+    WHERE storage_small_item_id = OLD.id
+  ) OR EXISTS (
+    SELECT 1 FROM inventory_consumption_records
+    WHERE storage_small_item_id = OLD.id
+  ) THEN
+    RAISE EXCEPTION '小项 % 仍被历史业务记录引用，不能删除；可改名或停止继续使用', OLD.id;
+  END IF;
+
+  RETURN OLD;
+END $$;
+
+REVOKE ALL ON FUNCTION prevent_referenced_small_item_delete() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS storage_small_item_prevent_referenced_delete
+ON storage_small_item_options;
+CREATE TRIGGER storage_small_item_prevent_referenced_delete
+BEFORE DELETE ON storage_small_item_options
+FOR EACH ROW EXECUTE FUNCTION prevent_referenced_small_item_delete();
 
 CREATE OR REPLACE FUNCTION validate_owned_consumption_projects()
 RETURNS TRIGGER
