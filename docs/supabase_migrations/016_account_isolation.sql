@@ -3,7 +3,7 @@
 -- 业务规则：APP 只有一个门店，但每个登录账号只能访问自己的业务数据。
 -- 安全规则：执行前必须在自己的 SQL Editor 副本中把全 0 UUID 替换为
 -- 已核验的正式账号 UUID；不要把正式账号邮箱或 UUID 提交到代码仓库。
--- 正式账号、体验账号任一缺失或历史关系异常，事务都会主动失败并回滚。
+-- 正式账号、体验账号任一缺失、邮箱重复或历史关系异常，事务都会主动失败并回滚。
 
 BEGIN;
 
@@ -12,18 +12,25 @@ SET LOCAL statement_timeout = '5min';
 
 CREATE TEMP TABLE account_isolation_context (
   production_owner UUID NOT NULL,
-  demo_owner UUID NOT NULL
+  demo_owner UUID
 ) ON COMMIT DROP;
 
 INSERT INTO account_isolation_context (production_owner, demo_owner) VALUES (
   '00000000-0000-0000-0000-000000000000'::UUID,
-  'd4e5f6a7-b8c9-4012-d345-e67890123456'::UUID
+  (
+    SELECT id
+    FROM auth.users
+    WHERE LOWER(email) = LOWER('user@example.com')
+    ORDER BY created_at, id
+    LIMIT 1
+  )
 );
 
 DO $$
 DECLARE
   v_production_owner UUID;
   v_demo_owner UUID;
+  v_demo_account_count INTEGER;
 BEGIN
   SELECT production_owner, demo_owner
   INTO v_production_owner, v_demo_owner
@@ -37,6 +44,15 @@ BEGIN
     RAISE EXCEPTION '016 已停止：production_owner 不存在于 auth.users';
   END IF;
 
+  SELECT COUNT(*)
+  INTO v_demo_account_count
+  FROM auth.users
+  WHERE LOWER(email) = LOWER('user@example.com');
+
+  IF v_demo_account_count <> 1 OR v_demo_owner IS NULL THEN
+    RAISE EXCEPTION '016 已停止：体验邮箱必须且只能对应一个 Auth 用户，当前数量：%', v_demo_account_count;
+  END IF;
+
   IF v_production_owner = v_demo_owner THEN
     RAISE EXCEPTION '016 已停止：正式账号与体验账号不能是同一用户';
   END IF;
@@ -48,7 +64,7 @@ BEGIN
       AND LOWER(email) = LOWER('user@example.com')
       AND email_confirmed_at IS NOT NULL
   ) THEN
-    RAISE EXCEPTION '016 已停止：请先执行 013 创建并确认独立体验账号';
+    RAISE EXCEPTION '016 已停止：请先执行 013 检查并确认独立体验账号';
   END IF;
 END $$;
 
