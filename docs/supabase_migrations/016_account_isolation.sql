@@ -1,10 +1,14 @@
 -- 账号级数据隔离迁移
 --
 -- 业务规则：APP 只有一个门店，但每个登录账号只能访问自己的业务数据。
--- 安全规则：本脚本不会猜测现有正式数据归属。执行前必须把下面的全 0 UUID
--- 替换为现有正式数据所属账号的 auth.users.id，否则事务会主动失败。
+-- 安全规则：执行前必须在自己的 SQL Editor 副本中把全 0 UUID 替换为
+-- 已核验的正式账号 UUID；不要把正式账号邮箱或 UUID 提交到代码仓库。
+-- 正式账号、体验账号任一缺失或历史关系异常，事务都会主动失败并回滚。
 
 BEGIN;
+
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
 
 CREATE TEMP TABLE account_isolation_context (
   production_owner UUID NOT NULL,
@@ -20,29 +24,31 @@ DO $$
 DECLARE
   v_production_owner UUID;
   v_demo_owner UUID;
-  v_has_demo_data BOOLEAN;
 BEGIN
   SELECT production_owner, demo_owner
   INTO v_production_owner, v_demo_owner
   FROM account_isolation_context;
 
   IF v_production_owner = '00000000-0000-0000-0000-000000000000'::UUID THEN
-    RAISE EXCEPTION '请先填写 production_owner，再执行账号隔离迁移';
+    RAISE EXCEPTION '016 已停止：请先填写已核验的 production_owner UUID';
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = v_production_owner) THEN
-    RAISE EXCEPTION 'production_owner 不存在于 auth.users：%', v_production_owner;
+    RAISE EXCEPTION '016 已停止：production_owner 不存在于 auth.users';
   END IF;
 
-  SELECT EXISTS (
-    SELECT 1 FROM customers WHERE name LIKE '演示-%'
-    UNION ALL
-    SELECT 1 FROM storage_small_item_options WHERE name LIKE '演示-%'
-  ) INTO v_has_demo_data;
+  IF v_production_owner = v_demo_owner THEN
+    RAISE EXCEPTION '016 已停止：正式账号与体验账号不能是同一用户';
+  END IF;
 
-  IF v_has_demo_data AND
-      NOT EXISTS (SELECT 1 FROM auth.users WHERE id = v_demo_owner) THEN
-    RAISE EXCEPTION '检测到演示数据，但体验账号 UUID 不存在：%', v_demo_owner;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM auth.users
+    WHERE id = v_demo_owner
+      AND LOWER(email) = LOWER('user@example.com')
+      AND email_confirmed_at IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION '016 已停止：请先执行 013 创建并确认独立体验账号';
   END IF;
 END $$;
 
@@ -495,6 +501,16 @@ BEGIN
   END LOOP;
 END $$;
 
+ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage_big_item_options ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage_small_item_options ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE consumption_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_purchase_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_consumption_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_supplementary_in_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE push_devices ENABLE ROW LEVEL SECURITY;
+
 CREATE POLICY customers_owner_only ON customers
   FOR ALL TO authenticated USING (owner_id = auth.uid())
   WITH CHECK (owner_id = auth.uid());
@@ -522,8 +538,6 @@ CREATE POLICY inventory_supp_in_owner_only ON inventory_supplementary_in_records
 CREATE POLICY push_devices_owner_only ON push_devices
   FOR ALL TO authenticated USING (owner_id = auth.uid())
   WITH CHECK (owner_id = auth.uid());
-
-ALTER TABLE push_devices ENABLE ROW LEVEL SECURITY;
 
 CREATE INDEX IF NOT EXISTS idx_customers_owner ON customers(owner_id);
 CREATE INDEX IF NOT EXISTS idx_storage_records_owner_date

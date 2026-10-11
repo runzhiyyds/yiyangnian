@@ -1,41 +1,60 @@
 -- 体验账号：user@example.com / 123456
--- 在 Supabase SQL Editor 中执行
 --
--- 【必做】关闭邮箱确认（项目无发信能力时）：
---   Dashboard → Authentication → Providers → Email
---   关闭「Confirm email / 确认电子邮件」→ Save
---
--- 本脚本会：创建体验账号；若已存在则补全「已确认」状态并重置密码为 123456
+-- 生产安全边界：
+-- 1. 只创建固定的体验账号，不修改任何其他用户。
+-- 2. 若同邮箱或固定 UUID 已被其他账号占用，立即报错并整体回滚。
+-- 3. 若体验账号已存在，不重置密码、不改确认状态；密码维护请使用 Supabase Dashboard。
+-- 4. 不再批量确认项目中的其他用户。
+
+BEGIN;
+
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '2min';
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 DO $$
 DECLARE
-  v_user_id uuid := 'd4e5f6a7-b8c9-4012-d345-e67890123456';
-  v_existing_id uuid;
+  v_demo_id UUID := 'd4e5f6a7-b8c9-4012-d345-e67890123456';
+  v_demo_email TEXT := 'user@example.com';
+  v_user_by_id auth.users%ROWTYPE;
+  v_user_by_email auth.users%ROWTYPE;
 BEGIN
-  SELECT id INTO v_existing_id FROM auth.users WHERE email = 'user@example.com';
+  SELECT *
+  INTO v_user_by_id
+  FROM auth.users
+  WHERE id = v_demo_id;
 
-  IF v_existing_id IS NOT NULL THEN
-    UPDATE auth.users
-    SET
-      email_confirmed_at = COALESCE(email_confirmed_at, NOW()),
-      encrypted_password = crypt('123456', gen_salt('bf')),
-      updated_at = NOW()
-    WHERE id = v_existing_id;
+  SELECT *
+  INTO v_user_by_email
+  FROM auth.users
+  WHERE LOWER(email) = LOWER(v_demo_email);
 
-    UPDATE auth.identities
-    SET
-      identity_data = jsonb_set(
-        COALESCE(identity_data, '{}'::jsonb),
-        '{email_verified}',
-        'true'::jsonb,
-        true
-      ),
-      updated_at = NOW()
-    WHERE user_id = v_existing_id AND provider = 'email';
+  IF v_user_by_id.id IS NOT NULL
+    AND LOWER(COALESCE(v_user_by_id.email, '')) <> LOWER(v_demo_email) THEN
+    RAISE EXCEPTION '013 已停止：体验账号固定 UUID 已被其他邮箱占用';
+  END IF;
 
-    RAISE NOTICE '体验账号已存在，已标记为邮箱已确认并重置密码为 123456';
+  IF v_user_by_email.id IS NOT NULL
+    AND v_user_by_email.id <> v_demo_id THEN
+    RAISE EXCEPTION '013 已停止：体验账号邮箱已绑定到其他 UUID：%', v_user_by_email.id;
+  END IF;
+
+  IF v_user_by_id.id IS NOT NULL THEN
+    IF v_user_by_id.email_confirmed_at IS NULL THEN
+      RAISE EXCEPTION '013 已停止：体验账号已存在但邮箱未确认，请手动确认或执行已加固的 015';
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1
+      FROM auth.identities
+      WHERE user_id = v_demo_id
+        AND provider = 'email'
+    ) THEN
+      RAISE EXCEPTION '013 已停止：体验账号存在但缺少 email identity，请在 Authentication 用户页修复';
+    END IF;
+
+    RAISE NOTICE '体验账号已存在且状态有效，未修改密码或确认状态';
     RETURN;
   END IF;
 
@@ -57,18 +76,18 @@ BEGIN
     email_change_token_new,
     recovery_token
   ) VALUES (
-    v_user_id,
+    v_demo_id,
     '00000000-0000-0000-0000-000000000000',
     'authenticated',
     'authenticated',
-    'user@example.com',
+    v_demo_email,
     crypt('123456', gen_salt('bf')),
     NOW(),
-    '{"provider":"email","providers":["email"]}'::jsonb,
-    '{"display_name":"体验账号"}'::jsonb,
+    '{"provider":"email","providers":["email"]}'::JSONB,
+    '{"display_name":"体验账号"}'::JSONB,
     NOW(),
     NOW(),
-    false,
+    FALSE,
     '',
     '',
     '',
@@ -85,14 +104,14 @@ BEGIN
     created_at,
     updated_at
   ) VALUES (
-    v_user_id,
-    v_user_id,
-    'user@example.com',
-    jsonb_build_object(
-      'sub', v_user_id::text,
-      'email', 'user@example.com',
-      'email_verified', true,
-      'phone_verified', false
+    v_demo_id,
+    v_demo_id,
+    v_demo_email,
+    JSONB_BUILD_OBJECT(
+      'sub', v_demo_id::TEXT,
+      'email', v_demo_email,
+      'email_verified', TRUE,
+      'phone_verified', FALSE
     ),
     'email',
     NOW(),
@@ -100,22 +119,7 @@ BEGIN
     NOW()
   );
 
-  RAISE NOTICE '体验账号已创建：user@example.com / 123456（邮箱已确认，可直接登录）';
+  RAISE NOTICE '体验账号已创建；未修改其他 Auth 用户';
 END $$;
 
--- 将项目中所有未确认用户标记为已确认（小团队内部账号，无自助注册）
-UPDATE auth.users
-SET email_confirmed_at = NOW(), updated_at = NOW()
-WHERE email_confirmed_at IS NULL;
-
-UPDATE auth.identities
-SET
-  identity_data = jsonb_set(
-    COALESCE(identity_data, '{}'::jsonb),
-    '{email_verified}',
-    'true'::jsonb,
-    true
-  ),
-  updated_at = NOW()
-WHERE provider = 'email'
-  AND COALESCE(identity_data->>'email_verified', 'false') <> 'true';
+COMMIT;
