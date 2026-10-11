@@ -8,6 +8,8 @@ import '../../core/demo_mode.dart';
 import '../../core/error_message.dart';
 import '../../core/retry_helper.dart';
 import '../auth/auth_service.dart';
+import '../storage/storage_model.dart';
+import '../storage/storage_repository.dart';
 import '../storage_options/storage_small_item_repository.dart';
 import 'inventory_consumption_repository.dart';
 import 'inventory_models.dart';
@@ -47,6 +49,8 @@ class _InventorySuppOutEditScreenState
   String? _error;
   late bool _isEditing;
   InventoryConsumptionRecordModel? _loadedRecord;
+  StorageRecordModel? _sourceStorage;
+  bool _sourceStorageLoading = false;
 
   String _cacheKey(BuildContext context) =>
       DemoMode.inventorySmallOptionsCacheKey(
@@ -75,11 +79,11 @@ class _InventorySuppOutEditScreenState
   Future<void> _loadOptions() async {
     final cache = context.read<DataCache>();
     final key = _cacheKey(context);
+    final email = context.read<AuthService>().user?.email;
     var opts = cache.get<List<StorageSmallItemOption>>(key);
     if (opts == null) {
       final repo = context.read<StorageSmallItemRepository>();
       final all = await retryOnFailure(() => repo.getAll());
-      final email = context.read<AuthService>().user?.email;
       opts = DemoMode.filterSmallItemOptions(email, all);
       if (mounted) cache.set(key, opts);
     }
@@ -105,7 +109,39 @@ class _InventorySuppOutEditScreenState
         _quantity = r.quantity;
         _remarkController.text = r.remark ?? '';
       });
+      await _loadSourceStorage(r);
     }
+  }
+
+  bool _isAutomaticOutbound(InventoryConsumptionRecordModel record) =>
+      record.sourceStorageRecordId != null ||
+      (record.remark ?? '').trim().startsWith('自动出库');
+
+  Future<void> _loadSourceStorage(
+    InventoryConsumptionRecordModel record,
+  ) async {
+    final sourceId = record.sourceStorageRecordId;
+    if (sourceId == null) return;
+    setState(() => _sourceStorageLoading = true);
+    try {
+      final source = await retryOnFailure(
+        () => context.read<StorageRepository>().getById(sourceId),
+      );
+      if (!mounted || _loadedRecord?.id != record.id) return;
+      setState(() => _sourceStorage = source);
+    } catch (_) {
+      // 出库详情仍可正常查看；来源区域会提示暂时无法读取。
+    } finally {
+      if (mounted && _loadedRecord?.id == record.id) {
+        setState(() => _sourceStorageLoading = false);
+      }
+    }
+  }
+
+  Future<void> _openSourceStorage() async {
+    final storage = _sourceStorage;
+    if (storage == null) return;
+    await context.push('/storage/${storage.id}');
   }
 
   Future<void> _save() async {
@@ -208,6 +244,8 @@ class _InventorySuppOutEditScreenState
   Widget build(BuildContext context) {
     final isEdit = widget.recordId != null;
     final isVoided = _loadedRecord?.isVoided ?? false;
+    final isAutomaticOutbound =
+        _loadedRecord != null && _isAutomaticOutbound(_loadedRecord!);
     final title = isEdit
         ? (_isEditing ? '编辑出库' : '出库详情')
         : (_isFromContext ? '为「${widget.initialSmallItemName}」出库' : '新增出库');
@@ -266,6 +304,10 @@ class _InventorySuppOutEditScreenState
             Text(_error!, style: const TextStyle(color: Colors.red)),
             const SizedBox(height: 16),
           ],
+          if (isEdit && isAutomaticOutbound) ...[
+            _buildSourceStorageCard(context),
+            const SizedBox(height: 16),
+          ],
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -279,9 +321,10 @@ class _InventorySuppOutEditScreenState
                         vertical: 12,
                       ),
                       decoration: BoxDecoration(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest
+                            .withValues(alpha: 0.5),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Row(
@@ -311,7 +354,7 @@ class _InventorySuppOutEditScreenState
                     )
                   else
                     DropdownButtonFormField<int>(
-                      value:
+                      initialValue:
                           _smallItemOptions.any(
                             (o) => o.id == _selectedSmallItemId,
                           )
@@ -331,8 +374,9 @@ class _InventorySuppOutEditScreenState
                       onChanged: !_isEditing
                           ? null
                           : (v) {
-                              if (v != null)
+                              if (v != null) {
                                 setState(() => _selectedSmallItemId = v);
+                              }
                             },
                     ),
                   const SizedBox(height: 16),
@@ -395,6 +439,55 @@ class _InventorySuppOutEditScreenState
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildSourceStorageCard(BuildContext context) {
+    final source = _sourceStorage;
+    final sourceId = _loadedRecord?.sourceStorageRecordId;
+    String subtitle;
+    if (_sourceStorageLoading) {
+      subtitle = '正在读取关联储值…';
+    } else if (source != null) {
+      final date = source.storageDate;
+      final dateText =
+          '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      subtitle =
+          '${source.customerName} · ${source.code}\n储值日期：$dateText · 金额：¥${source.amount.toStringAsFixed(0)}';
+    } else if (sourceId == null) {
+      subtitle = '原关联储值记录已被删除，当前只能保留自动出库痕迹。';
+    } else {
+      subtitle = '暂时无法读取关联储值，请稍后重试。';
+    }
+
+    return Card(
+      color: Theme.of(
+        context,
+      ).colorScheme.primaryContainer.withValues(alpha: 0.35),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.account_balance_wallet_outlined),
+              title: const Text('由客户储值自动出库'),
+              subtitle: Text(subtitle),
+              trailing: source == null
+                  ? null
+                  : TextButton(
+                      onPressed: _openSourceStorage,
+                      child: const Text('查看储值'),
+                    ),
+            ),
+            Text(
+              '这条库存记录与客户储值关联；修改出库不会同步修改原储值。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
       ),
     );
   }

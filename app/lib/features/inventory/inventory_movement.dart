@@ -1,4 +1,5 @@
 import 'inventory_models.dart';
+import '../storage/storage_model.dart';
 
 enum InventoryMovementSource { purchase, supplementaryIn, outbound }
 
@@ -15,6 +16,9 @@ class InventoryMovement {
     required this.balanceAfter,
     this.remark,
     this.sourceStorageRecordId,
+    this.sourceStorageCode,
+    this.sourceCustomerName,
+    this.isAutomaticOutbound = false,
     this.isEstimatedTime = false,
     this.isReversal = false,
     this.originalVoidedAt,
@@ -30,6 +34,9 @@ class InventoryMovement {
   final int balanceAfter;
   final String? remark;
   final int? sourceStorageRecordId;
+  final String? sourceStorageCode;
+  final String? sourceCustomerName;
+  final bool isAutomaticOutbound;
   final bool isEstimatedTime;
   final bool isReversal;
   final DateTime? originalVoidedAt;
@@ -54,6 +61,9 @@ class InventoryMovement {
     balanceAfter: value,
     remark: remark,
     sourceStorageRecordId: sourceStorageRecordId,
+    sourceStorageCode: sourceStorageCode,
+    sourceCustomerName: sourceCustomerName,
+    isAutomaticOutbound: isAutomaticOutbound,
     isEstimatedTime: isEstimatedTime,
     isReversal: isReversal,
     originalVoidedAt: originalVoidedAt,
@@ -69,6 +79,7 @@ class InventoryMovementLedger {
     required List<InventoryPurchaseRecordModel> purchases,
     required List<InventorySuppInRecordModel> supplementaryIn,
     required List<InventoryConsumptionRecordModel> outbound,
+    Map<int, StorageRecordModel> sourceStorages = const {},
   }) {
     final movements = <InventoryMovement>[];
 
@@ -161,7 +172,13 @@ class InventoryMovementLedger {
       final occurredAt =
           record.occurredAt ??
           _legacyTime(record.consumptionDate, const Duration(hours: 18));
-      final title = record.sourceStorageRecordId == null ? '手工出库' : '储值自动出库';
+      final isAutomaticOutbound =
+          record.sourceStorageRecordId != null ||
+          (record.remark ?? '').trim().startsWith('自动出库');
+      final sourceStorage = record.sourceStorageRecordId == null
+          ? null
+          : sourceStorages[record.sourceStorageRecordId!];
+      final title = isAutomaticOutbound ? '储值自动出库' : '手工出库';
       movements.add(
         InventoryMovement(
           source: InventoryMovementSource.outbound,
@@ -173,6 +190,9 @@ class InventoryMovementLedger {
           balanceAfter: 0,
           remark: record.remark,
           sourceStorageRecordId: record.sourceStorageRecordId,
+          sourceStorageCode: sourceStorage?.code,
+          sourceCustomerName: sourceStorage?.customerName,
+          isAutomaticOutbound: isAutomaticOutbound,
           isEstimatedTime:
               record.occurredAt == null || record.occurredAtEstimated,
           originalVoidedAt: record.voidedAt,
@@ -187,9 +207,12 @@ class InventoryMovementLedger {
             smallItemId: smallItemId,
             occurredAt: record.voidedAt!,
             delta: record.quantity,
-            title: '撤销出库',
+            title: isAutomaticOutbound ? '撤销储值自动出库' : '撤销手工出库',
             balanceAfter: 0,
             sourceStorageRecordId: record.sourceStorageRecordId,
+            sourceStorageCode: sourceStorage?.code,
+            sourceCustomerName: sourceStorage?.customerName,
+            isAutomaticOutbound: isAutomaticOutbound,
             isReversal: true,
             voidReason: record.voidReason,
           ),

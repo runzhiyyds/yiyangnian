@@ -7,11 +7,13 @@ class InventoryMovementTimeline extends StatelessWidget {
     super.key,
     required this.movements,
     required this.onTap,
+    this.onOpenSourceStorage,
     this.compact = false,
   });
 
   final List<InventoryMovement> movements;
   final ValueChanged<InventoryMovement> onTap;
+  final ValueChanged<int>? onOpenSourceStorage;
   final bool compact;
 
   @override
@@ -36,6 +38,7 @@ class InventoryMovementTimeline extends StatelessWidget {
             isLast: index == movements.length - 1,
             compact: compact,
             onTap: () => onTap(movements[index]),
+            onOpenSourceStorage: onOpenSourceStorage,
           ),
       ],
     );
@@ -48,12 +51,14 @@ class _MovementRow extends StatelessWidget {
     required this.isLast,
     required this.compact,
     required this.onTap,
+    required this.onOpenSourceStorage,
   });
 
   final InventoryMovement movement;
   final bool isLast;
   final bool compact;
   final VoidCallback onTap;
+  final ValueChanged<int>? onOpenSourceStorage;
 
   @override
   Widget build(BuildContext context) {
@@ -150,6 +155,13 @@ class _MovementRow extends StatelessWidget {
                         '变更后库存：${movement.balanceAfter}件',
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
+                      if (movement.isAutomaticOutbound) ...[
+                        const SizedBox(height: 8),
+                        _SourceStorageRow(
+                          movement: movement,
+                          onOpen: onOpenSourceStorage,
+                        ),
+                      ],
                       if (movement.originalIsVoided) ...[
                         const SizedBox(height: 6),
                         Text(
@@ -191,4 +203,57 @@ class _MovementRow extends StatelessWidget {
 
   String _formatTime(DateTime value) =>
       '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+}
+
+class _SourceStorageRow extends StatelessWidget {
+  const _SourceStorageRow({required this.movement, required this.onOpen});
+
+  final InventoryMovement movement;
+  final ValueChanged<int>? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final storageId = movement.sourceStorageRecordId;
+    final parts = <String>[
+      if ((movement.sourceCustomerName ?? '').trim().isNotEmpty)
+        movement.sourceCustomerName!.trim(),
+      if ((movement.sourceStorageCode ?? '').trim().isNotEmpty)
+        movement.sourceStorageCode!.trim(),
+    ];
+    final description = parts.isNotEmpty
+        ? '关联储值：${parts.join(' · ')}'
+        : storageId == null
+        ? '原关联储值已删除，无法打开'
+        : '关联储值：点击查看详情';
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+      decoration: BoxDecoration(
+        color: colorScheme.primaryContainer.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.account_balance_wallet_outlined,
+            size: 18,
+            color: colorScheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              description,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          if (storageId != null && onOpen != null)
+            TextButton(
+              onPressed: () => onOpen!(storageId),
+              child: const Text('查看储值'),
+            ),
+        ],
+      ),
+    );
+  }
 }

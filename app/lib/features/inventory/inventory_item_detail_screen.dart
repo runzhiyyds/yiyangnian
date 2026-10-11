@@ -9,6 +9,8 @@ import '../../core/error_message.dart';
 import '../../core/retry_helper.dart';
 import '../../widgets/loading_placeholder.dart';
 import '../auth/auth_service.dart';
+import '../storage/storage_model.dart';
+import '../storage/storage_repository.dart';
 import '../storage_options/storage_small_item_repository.dart';
 import 'inventory_consumption_repository.dart';
 import 'inventory_models.dart';
@@ -102,6 +104,22 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
       final supplementaryIn = results[1] as List<InventorySuppInRecordModel>;
       final outbound = results[2] as List<InventoryConsumptionRecordModel>;
       final smallOptions = results[3] as List<StorageSmallItemOption>;
+      final sourceStorageIds = outbound
+          .map((record) => record.sourceStorageRecordId)
+          .whereType<int>()
+          .toSet();
+      var sourceStorages = <int, StorageRecordModel>{};
+      if (sourceStorageIds.isNotEmpty) {
+        try {
+          final records = await retryOnFailure(
+            () => context.read<StorageRepository>().getByIds(sourceStorageIds),
+          );
+          sourceStorages = {for (final record in records) record.id: record};
+        } catch (_) {
+          // 来源储值读取失败不应阻断库存时间线；仍保留可用的来源 ID 入口。
+        }
+      }
+      if (!mounted) return;
       final email = context.read<AuthService>().user?.email;
       final name = smallOptions
           .firstWhere(
@@ -136,6 +154,7 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
         purchases: scoped.purchases,
         supplementaryIn: scoped.suppIn,
         outbound: scoped.consumptions,
+        sourceStorages: sourceStorages,
       );
       final balance = movements.isEmpty ? 0 : movements.first.balanceAfter;
       final cachedData = _ItemDetailCache(
@@ -175,6 +194,13 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
     if (!mounted) return;
     context.read<DataCache>().remove(_cacheKey(context));
     context.read<DataRefreshNotifier>().invalidateInventory();
+    await _load();
+  }
+
+  Future<void> _openSourceStorage(int storageId) async {
+    await context.push('/storage/$storageId');
+    if (!mounted) return;
+    context.read<DataCache>().remove(_cacheKey(context));
     await _load();
   }
 
@@ -298,6 +324,7 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
             InventoryMovementTimeline(
               movements: _visibleMovements,
               onTap: _openMovement,
+              onOpenSourceStorage: _openSourceStorage,
             ),
           ],
         ),
