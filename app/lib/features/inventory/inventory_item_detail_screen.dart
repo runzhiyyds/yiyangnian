@@ -17,6 +17,7 @@ import 'inventory_models.dart';
 import 'inventory_movement.dart';
 import 'inventory_purchase_repository.dart';
 import 'inventory_supp_in_repository.dart';
+import 'widgets/inventory_linked_storages.dart';
 import 'widgets/inventory_movement_timeline.dart';
 
 class InventoryItemDetailScreen extends StatefulWidget {
@@ -33,6 +34,7 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
   String _smallItemName = '';
   int _currentBalance = 0;
   List<InventoryMovement> _movements = const [];
+  List<StorageRecordModel> _linkedStorages = const [];
   InventoryMovementFilter _filter = InventoryMovementFilter.all;
   bool _loading = true;
   String? _error;
@@ -73,6 +75,7 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
         _smallItemName = cached.name;
         _currentBalance = cached.balance;
         _movements = cached.movements;
+        _linkedStorages = cached.linkedStorages;
         _loading = false;
         _error = null;
       });
@@ -90,6 +93,7 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
       final suppInRepo = context.read<InventorySuppInRepository>();
       final consumptionRepo = context.read<InventoryConsumptionRepository>();
       final smallItemRepo = context.read<StorageSmallItemRepository>();
+      final storageRepo = context.read<StorageRepository>();
       final results = await Future.wait([
         retryOnFailure(() => purchaseRepo.getAll()),
         retryOnFailure(() => suppInRepo.getBySmallItemId(widget.smallItemId)),
@@ -97,6 +101,7 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
           () => consumptionRepo.getBySmallItemId(widget.smallItemId),
         ),
         retryOnFailure(() => smallItemRepo.getAll()),
+        retryOnFailure(() => storageRepo.getAll()),
       ]);
       if (!mounted) return;
 
@@ -104,23 +109,17 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
       final supplementaryIn = results[1] as List<InventorySuppInRecordModel>;
       final outbound = results[2] as List<InventoryConsumptionRecordModel>;
       final smallOptions = results[3] as List<StorageSmallItemOption>;
-      final sourceStorageIds = outbound
-          .map((record) => record.sourceStorageRecordId)
-          .whereType<int>()
-          .toSet();
-      var sourceStorages = <int, StorageRecordModel>{};
-      if (sourceStorageIds.isNotEmpty) {
-        try {
-          final records = await retryOnFailure(
-            () => context.read<StorageRepository>().getByIds(sourceStorageIds),
-          );
-          sourceStorages = {for (final record in records) record.id: record};
-        } catch (_) {
-          // 来源储值读取失败不应阻断库存时间线；仍保留可用的来源 ID 入口。
-        }
-      }
-      if (!mounted) return;
+      final storages = results[4] as List<StorageRecordModel>;
       final email = context.read<AuthService>().user?.email;
+      final scopedStorages = DemoMode.filterStorages(email, storages);
+      final sourceStorages = {
+        for (final record in scopedStorages) record.id: record,
+      };
+      final linkedStorages = scopedStorages
+          .where(
+            (record) => record.storageSmallItemIds.contains(widget.smallItemId),
+          )
+          .toList(growable: false);
       final name = smallOptions
           .firstWhere(
             (option) => option.id == widget.smallItemId,
@@ -161,12 +160,14 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
         name: name,
         balance: balance,
         movements: movements,
+        linkedStorages: linkedStorages,
       );
       cache.set(cacheKey, cachedData);
       setState(() {
         _smallItemName = name;
         _currentBalance = balance;
         _movements = movements;
+        _linkedStorages = linkedStorages;
         _loading = false;
       });
     } catch (error) {
@@ -295,6 +296,11 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
               ),
             ),
             const SizedBox(height: 18),
+            InventoryLinkedStorages(
+              storages: _linkedStorages,
+              onTap: (storage) => _openSourceStorage(storage.id),
+            ),
+            const SizedBox(height: 22),
             Row(
               children: [
                 Expanded(
@@ -346,9 +352,11 @@ class _ItemDetailCache {
     required this.name,
     required this.balance,
     required this.movements,
+    required this.linkedStorages,
   });
 
   final String name;
   final int balance;
   final List<InventoryMovement> movements;
+  final List<StorageRecordModel> linkedStorages;
 }

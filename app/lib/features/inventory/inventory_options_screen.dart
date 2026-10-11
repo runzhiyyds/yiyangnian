@@ -22,6 +22,7 @@ import 'inventory_purchase_repository.dart';
 import 'inventory_supp_in_repository.dart';
 import 'inventory_consumption_repository.dart';
 import 'inventory_movement.dart';
+import 'widgets/inventory_linked_storages.dart';
 import 'widgets/inventory_movement_timeline.dart';
 
 class InventoryOptionsScreen extends StatefulWidget {
@@ -126,6 +127,9 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       final scopedPurchases = scoped.purchases;
       final scopedSuppIn = scoped.suppIn;
       final scopedInvConsumption = scoped.consumptions;
+      final sourceStorages = {
+        for (final record in scopedStorages) record.id: record,
+      };
 
       final balanceBySmallItem = DemoMode.computeInventoryBalances(
         purchases: scopedPurchases,
@@ -141,6 +145,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
             purchases: scopedPurchases,
             supplementaryIn: scopedSuppIn,
             outbound: scopedInvConsumption,
+            sourceStorages: sourceStorages,
           ),
       };
 
@@ -246,6 +251,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       if (!mounted) return;
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
       await _load();
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('已新增小项「$name」')));
@@ -274,43 +280,39 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
           builder: (ctx, setState) => AlertDialog(
             title: const Text('归类大项'),
             content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '小项「${opt.name}」当前归属：$currentBigName',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    '选择目标大项：',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  ListTile(
-                    dense: true,
-                    title: const Text('未归类'),
-                    leading: Radio<int?>(
-                      value: null,
-                      groupValue: selectedBigId,
-                      onChanged: (v) => setState(() => selectedBigId = null),
+              child: RadioGroup<int?>(
+                groupValue: selectedBigId,
+                onChanged: (value) => setState(() => selectedBigId = value),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '小项「${opt.name}」当前归属：$currentBigName',
+                      style: const TextStyle(fontSize: 13),
                     ),
-                    onTap: () => setState(() => selectedBigId = null),
-                  ),
-                  ..._bigItems.map(
-                    (b) => ListTile(
+                    const SizedBox(height: 12),
+                    const Text(
+                      '选择目标大项：',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    ListTile(
                       dense: true,
-                      title: Text(b.name),
-                      leading: Radio<int?>(
-                        value: b.id,
-                        groupValue: selectedBigId,
-                        onChanged: (v) => setState(() => selectedBigId = b.id),
-                      ),
-                      onTap: () => setState(() => selectedBigId = b.id),
+                      title: const Text('未归类'),
+                      leading: const Radio<int?>(value: null),
+                      onTap: () => setState(() => selectedBigId = null),
                     ),
-                  ),
-                ],
+                    ..._bigItems.map(
+                      (b) => ListTile(
+                        dense: true,
+                        title: Text(b.name),
+                        leading: Radio<int?>(value: b.id),
+                        onTap: () => setState(() => selectedBigId = b.id),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             actions: [
@@ -328,6 +330,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       },
     );
     if (result == null) return;
+    if (!mounted) return;
     final newBigId = result['bigId'];
     if (newBigId == currentBigId) return;
     try {
@@ -336,6 +339,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       if (!mounted) return;
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
       await _load();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -723,10 +727,11 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
         break;
       }
     }
-    if (opt == null)
+    if (opt == null) {
       return const Center(
         child: Text('请选择左侧的小项', style: TextStyle(fontSize: 13)),
       );
+    }
     final optVal = opt;
     final balance = _balanceBySmallItem[smallId] ?? 0;
     final storages = _storagesBySmallId[smallId] ?? const [];
@@ -852,6 +857,17 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
             children: [
+              InventoryLinkedStorages(
+                storages: storages,
+                maxVisible: 5,
+                onTap: (storage) => context
+                    .push('/storage/${storage.id}')
+                    .then((_) => mounted ? _load() : null),
+                onViewAll: () => context
+                    .push('/inventory/item/$smallId')
+                    .then((_) => mounted ? _load() : null),
+              ),
+              const SizedBox(height: 18),
               Row(
                 children: [
                   Expanded(
@@ -875,6 +891,9 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
                 compact: true,
                 onTap: (movement) => context
                     .push(movement.route)
+                    .then((_) => mounted ? _load() : null),
+                onOpenSourceStorage: (storageId) => context
+                    .push('/storage/$storageId')
                     .then((_) => mounted ? _load() : null),
               ),
             ],
