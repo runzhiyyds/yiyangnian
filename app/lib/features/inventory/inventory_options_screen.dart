@@ -34,6 +34,10 @@ class InventoryOptionsScreen extends StatefulWidget {
 
 class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
   bool _loading = true;
+  bool _hasLoaded = false;
+  bool _loadInProgress = false;
+  bool _reloadQueued = false;
+  String? _loadedAccountId;
   String? _error;
   List<StorageBigItemOption> _bigItems = [];
   List<StorageSmallItemOption> _smallItems = [];
@@ -45,29 +49,90 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
   final Map<int, int> _balanceBySmallItem = {};
   final Map<int, List<InventoryMovement>> _movementsBySmallId = {};
   late final DataRefreshNotifier _refreshNotifier;
+  late final AuthService _authService;
+  String? _observedAccountId;
 
   @override
   void initState() {
     super.initState();
     _refreshNotifier = context.read<DataRefreshNotifier>();
     _refreshNotifier.addListener(_onDataChanged);
+    _authService = context.read<AuthService>();
+    _observedAccountId = _authService.user?.id;
+    _authService.addListener(_onAccountChanged);
     _load();
     _smallItemSearchController.addListener(() => setState(() {}));
   }
 
+  void _onAccountChanged() {
+    final accountId = _authService.user?.id;
+    if (!mounted || accountId == _observedAccountId) return;
+    _observedAccountId = accountId;
+    setState(() {
+      _hasLoaded = false;
+      _loading = true;
+      _error = null;
+      _bigItems = [];
+      _smallItems = [];
+      _balanceBySmallItem.clear();
+      _movementsBySmallId.clear();
+      _storagesBySmallId.clear();
+      _consumptionsBySmallId.clear();
+      _selectedBigName = '全部';
+      _selectedSmallId = null;
+      _smallItemSearchController.clear();
+    });
+    _onDataChanged();
+  }
+
   void _onDataChanged() {
-    if (mounted) _load();
+    if (!mounted) return;
+    if (_loadInProgress) {
+      _reloadQueued = true;
+    } else {
+      _load();
+    }
   }
 
   @override
   void dispose() {
     _refreshNotifier.removeListener(_onDataChanged);
+    _authService.removeListener(_onAccountChanged);
     _smallItemSearchController.dispose();
     super.dispose();
   }
 
+  Future<T> _read<T>(String operation, Future<T> Function() query) async {
+    final watch = Stopwatch()..start();
+    try {
+      return await retryOnFailure(query);
+    } catch (error) {
+      final code = error.toString().hashCode.abs().toRadixString(16).toUpperCase();
+      final backend = error is PostgrestException ? error.code : null;
+      debugPrint('[颐养年][库存][$operation] error=$code '
+          'type=${error.runtimeType} backend=$backend elapsedMs=${watch.elapsedMilliseconds}');
+      rethrow;
+    }
+  }
+
   Future<void> _load() async {
+    if (_loadInProgress || !mounted) return;
+    _loadInProgress = true;
+    final accountId = _authService.user?.id;
+    bool isCurrentAccount() => mounted && _authService.user?.id == accountId;
     setState(() {
+      if (_hasLoaded && _loadedAccountId != accountId) {
+        _hasLoaded = false;
+        _bigItems = [];
+        _smallItems = [];
+        _balanceBySmallItem.clear();
+        _movementsBySmallId.clear();
+        _storagesBySmallId.clear();
+        _consumptionsBySmallId.clear();
+        _selectedBigName = '全部';
+        _selectedSmallId = null;
+        _smallItemSearchController.clear();
+      }
       _loading = true;
       _error = null;
     });
@@ -80,23 +145,23 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       final suppInRepo = context.read<InventorySuppInRepository>();
       final invConsumptionRepo = context.read<InventoryConsumptionRepository>();
       final results = await Future.wait([
-        retryOnFailure(() => bigRepo.getAll()),
-        retryOnFailure(() => smallRepo.getAll()),
-        retryOnFailure(
+        _read('大项', () => bigRepo.getAll()),
+        _read('小项', () => smallRepo.getAll()),
+        _read('储值',
           () => storageRepo.getByStorageDateRange(
             DateTime(2000),
             DateTime.now().add(const Duration(days: 3650)),
           ),
         ),
-        retryOnFailure(
+        _read('消费',
           () => consumptionRepo.getByDateRange(
             DateTime(2000),
             DateTime.now().add(const Duration(days: 3650)),
           ),
         ),
-        retryOnFailure(() => purchaseRepo.getAll()),
-        retryOnFailure(() => suppInRepo.getAll()),
-        retryOnFailure(() => invConsumptionRepo.getAll()),
+        _read('进货', () => purchaseRepo.getAll()),
+        _read('补充入库', () => suppInRepo.getAll()),
+        _read('出库', () => invConsumptionRepo.getAll()),
       ]);
       final big = results[0] as List<StorageBigItemOption>;
       final small = results[1] as List<StorageSmallItemOption>;
@@ -106,9 +171,9 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       final allSuppIn = results[5] as List<InventorySuppInRecordModel>;
       final allInvConsumption =
           results[6] as List<InventoryConsumptionRecordModel>;
-      if (!mounted) return;
+      if (!isCurrentAccount()) return;
 
-      final email = context.read<AuthService>().user?.email;
+      final email = _authService.user?.email;
       final scopedSmall = DemoMode.filterSmallItemOptions(email, small);
       final scopedStorages = DemoMode.filterStorages(email, storages);
       final storageMap = {for (final s in storages) s.id: s};
@@ -181,14 +246,22 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
               ? _smallItems.first.id
               : null;
         }
+        _hasLoaded = true;
+        _loadedAccountId = accountId;
         _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!isCurrentAccount()) return;
       setState(() {
         _loading = false;
         _error = toUserFriendlyError(e);
       });
+    } finally {
+      _loadInProgress = false;
+      if (mounted && (_reloadQueued || !isCurrentAccount())) {
+        _reloadQueued = false;
+        _load();
+      }
     }
   }
 
@@ -452,6 +525,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
     required bool compact,
   }) {
     return ListView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: compact
           ? const EdgeInsets.fromLTRB(16, 8, 16, 24)
           : const EdgeInsets.fromLTRB(12, 8, 4, 16),
@@ -574,13 +648,25 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
+    if (_loading && !_hasLoaded) {
       return const Scaffold(body: Center(child: FullPageLoadingPlaceholder()));
     }
-    if (_error != null) {
+    if (_error != null && !_hasLoaded) {
       return Scaffold(
         body: Center(
-          child: Text(_error!, style: const TextStyle(color: Colors.red)),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_error!, textAlign: TextAlign.center,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                const SizedBox(height: 16),
+                FilledButton.icon(onPressed: _load, icon: const Icon(Icons.refresh),
+                    label: const Text('重试')),
+              ],
+            ),
+          ),
         ),
       );
     }
@@ -606,8 +692,23 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
     }
 
     return Scaffold(
-      body: Column(
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: Column(
         children: [
+          if (_loading) const LinearProgressIndicator(),
+          if (_error != null)
+            MaterialBanner(
+              content: Text('$_error\n正在显示上次成功加载的库存。'),
+              actions: [TextButton(onPressed: _loading ? null : _load,
+                  child: const Text('重试'))],
+            ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(onPressed: _loading ? null : _load,
+                icon: const Icon(Icons.refresh),
+                label: Text(_loading ? '刷新中…' : '刷新库存')),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
             child: Column(
@@ -683,6 +784,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
                   ),
           ),
         ],
+      ),
       ),
     );
   }
