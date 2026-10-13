@@ -9,6 +9,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
 import 'core/app_providers.dart';
 import 'core/config.dart';
+import 'core/network/supabase_http_client.dart';
+import 'core/supabase_auth_options.dart';
 import 'core/data_cache.dart';
 import 'core/push_notification_service.dart';
 
@@ -33,6 +35,8 @@ void main() async {
       await Supabase.initialize(
         url: Config.supabaseUrl,
         anonKey: Config.supabaseAnonKey,
+        httpClient: SupabaseHttpClient(),
+        authOptions: supabaseAuthOptions(Config.supabaseUrl),
       );
     }
     final client = Config.isSupabaseConfigured ? Supabase.instance.client : null;

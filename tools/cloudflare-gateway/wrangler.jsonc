@@ -1,0 +1,12 @@
+// Business gateway enabled with owner authorization on 2026-10-13.
+{
+  "name": "yiyangnian-api",
+  "main": "src/gateway.js",
+  "compatibility_date": "2026-10-13",
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "yiyangnian-api.pet-food-advisor.asia", "custom_domain": true }
+  ],
+  "vars": { "BUSINESS_GATEWAY_ENABLED": "true" },
+  "observability": { "enabled": false }
+}

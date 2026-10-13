@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/config.dart';
 import '../../core/data_refresh.dart';
 import '../../core/demo_credentials.dart';
+import '../../core/error_message.dart';
 import '../../core/push_notification_service.dart';
 import '../tree/tree_data_provider.dart';
 import 'auth_service.dart';
@@ -69,7 +70,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (_loading || !_formKey.currentState!.validate()) return;
     setState(() {
       _loading = true;
       _error = null;
@@ -78,11 +79,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await context
           .read<AuthService>()
-          .signIn(_emailController.text.trim(), _passwordController.text)
-          .timeout(
-            const Duration(seconds: 15),
-            onTimeout: () => throw TimeoutException('登录超时'),
-          );
+          .signIn(_emailController.text.trim(), _passwordController.text);
       debugPrint('[颐养年] 登录成功');
       if (!mounted) return;
       context.read<DataRefreshNotifier>().notifyDataChanged();
@@ -92,8 +89,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       debugPrint('[颐养年] 登录失败: $e');
       if (mounted) {
-        String msg = e
-            .toString()
+        String msg = (e is AuthException ? e.message : e.toString())
             .replaceAll('Exception:', '')
             .replaceAll('AuthException:', '')
             .trim();
@@ -103,6 +99,9 @@ class _LoginScreenState extends State<LoginScreen> {
           msg = '账号暂未启用，请联系管理员';
         } else if (e is TimeoutException) {
           msg = '登录超时，请检查网络后重试';
+        } else if (msg.contains('SocketException') || msg.contains('ClientException') ||
+            msg.contains('Failed host lookup')) {
+          msg = toUserFriendlyError(e);
         } else if (msg.contains('Rate limit')) {
           msg = '请求过于频繁，请稍后再试';
         }
