@@ -10,7 +10,6 @@ import '../../core/config.dart';
 import '../../core/data_refresh.dart';
 import '../../core/demo_credentials.dart';
 import '../../core/error_message.dart';
-import '../../core/push_notification_service.dart';
 import '../tree/tree_data_provider.dart';
 import 'auth_service.dart';
 
@@ -43,10 +42,7 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     try {
       debugPrint('[颐养年] 测试服务连接...');
-      await Supabase.instance.client
-          .from('customers')
-          .select()
-          .limit(1)
+      await context.read<AuthService>().testConnection()
           .timeout(
             const Duration(seconds: 10),
             onTimeout: () => throw Exception('连接超时'),
@@ -84,7 +80,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       context.read<DataRefreshNotifier>().notifyDataChanged();
       context.read<TreeDataProvider>().reset();
-      unawaited(PushNotificationService.syncCurrentDevice());
+      unawaited(context.read<AuthService>().syncDevice());
       context.go('/home/inventory');
     } catch (e) {
       debugPrint('[颐养年] 登录失败: $e');

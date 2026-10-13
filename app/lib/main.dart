@@ -31,12 +31,13 @@ void main() async {
       return true; // 防止继续传播导致崩溃
     };
 
+    final authOptions = supabaseAuthOptions(Config.supabaseUrl);
     if (Config.isSupabaseConfigured) {
       await Supabase.initialize(
         url: Config.supabaseUrl,
         anonKey: Config.supabaseAnonKey,
         httpClient: SupabaseHttpClient(),
-        authOptions: supabaseAuthOptions(Config.supabaseUrl),
+        authOptions: authOptions,
       );
     }
     final client = Config.isSupabaseConfigured ? Supabase.instance.client : null;
@@ -67,7 +68,7 @@ void main() async {
 
     runApp(
       MultiProvider(
-        providers: buildAppProviders(dataCache, client),
+        providers: buildAppProviders(dataCache, client, sessionStorage: authOptions.localStorage),
         child: const YiyangnianApp(),
       ),
     );

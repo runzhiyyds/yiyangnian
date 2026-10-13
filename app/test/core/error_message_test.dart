@@ -44,6 +44,17 @@ void main() {
       );
       expect(toUserFriendlyError(e), contains('服务暂时不可用'));
     });
+    test('database field misconfiguration has actionable diagnosis', () {
+      expect(
+        toUserFriendlyError(
+          const PostgrestException(
+            message: 'record "new" has no field "quantities"',
+            code: '42703',
+          ),
+        ),
+        contains('服务数据配置异常'),
+      );
+    });
     test('unknown returns a generic message and error code', () {
       final e = Exception('Some error');
       final msg = toUserFriendlyError(e);

@@ -4,6 +4,7 @@ import 'package:lunar/lunar.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/data_cache.dart';
+import '../../core/repository_read_cache.dart';
 import '../../core/data_refresh.dart';
 import '../../core/date_range_helper.dart';
 import '../../core/demo_mode.dart';
@@ -112,9 +113,13 @@ class _AnalyticsPreloadResult {
   final DateTime calendarSelectedMonth;
 }
 
-const String _kAnalyticsPreloadCacheKey = 'analytics_preload';
+String _analyticsPreloadKey(BuildContext context) {
+  final owner = context.read<AuthService>().user?.id;
+  final now = DateTime.now();
+  return 'analytics_preload_${owner}_${now.year}-${now.month}-${now.day}';
+}
 
-/// 供启动页调用：并行预加载首页与店铺分析数据，避免进入分析页时二次等待
+/// 首屏就绪后在后台调用；失败不阻止进入分析页。
 Future<void> preloadStoreAnalyticsData(BuildContext context) async {
   final customerRepo = context.read<CustomerRepository>();
   final storageRepo = context.read<StorageRepository>();
@@ -123,38 +128,49 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
   final bigItemRepo = context.read<StorageBigItemRepository>();
   final smallItemRepo = context.read<StorageSmallItemRepository>();
   final cache = context.read<DataCache>();
+  final auth = context.read<AuthService>();
+  final owner = auth.user?.id;
+  if (owner == null) return;
+  final email = auth.user?.email;
+  final key = _analyticsPreloadKey(context);
+  final revision = cache.revision;
 
   try {
     final (weekStart, weekEnd) = DateRangeHelper.thisWeek();
-    final monthStart = DateTime(weekStart.year, weekStart.month, 1);
+    final today = DateTime.now();
+    final monthStart = DateTime(today.year, today.month, 1);
     final monthEnd = DateTime(monthStart.year, monthStart.month + 1, 0);
 
-    final email = context.read<AuthService>().user?.email;
-    final customers = await retryOnFailure(() => customerRepo.getAll());
-    final scopedCustomers = DemoMode.filterCustomers(email, customers);
-    final bigOptions = await bigItemRepo.getAll();
+    final initial = await Future.wait<dynamic>([
+      retryOnFailure(() => customerRepo.getAll()),
+      bigItemRepo.getAll(),
+      storageRepo.getAll(),
+      consumptionRepo.getByDateRange(weekStart, weekEnd),
+      consumptionRepo.getByDateRange(monthStart, monthEnd),
+      smallItemRepo.getAll(),
+      storageRepo.getByStorageDateRange(weekStart, weekEnd),
+      purchaseRepo.getByDateRange(weekStart, weekEnd),
+    ]);
+    final scopedCustomers = DemoMode.filterCustomers(email, initial[0] as List<CustomerModel>);
+    final bigOptions = initial[1] as List<StorageBigItemOption>;
     final allBigItemNamesFromRepo = bigOptions.map((o) => o.name).toList();
-
-    final deposits = await Future.wait(
-      scopedCustomers.map((c) => customerRepo.getTotalDeposit(c.name)),
-    );
-    final depositByCustomer = {
-      for (var i = 0; i < scopedCustomers.length; i++)
-        scopedCustomers[i].name: deposits[i],
-    };
+    final scopedStorages = DemoMode.filterStorages(email, initial[2] as List<StorageRecordModel>);
+    final depositByCustomer = <String, double>{};
+    for (final storage in scopedStorages) {
+      depositByCustomer.update(storage.customerName, (v) => v + storage.amount,
+        ifAbsent: () => storage.amount);
+    }
     final sorted = scopedCustomers.toList()
-      ..sort((a, b) =>
-          (depositByCustomer[b.name] ?? 0).compareTo(depositByCustomer[a.name] ?? 0));
-
-    var consumptionsWeek = await consumptionRepo.getByDateRange(weekStart, weekEnd);
-    var consumptionsMonth = await consumptionRepo.getByDateRange(monthStart, monthEnd);
+      ..sort((a, b) => (depositByCustomer[b.name] ?? 0).compareTo(depositByCustomer[a.name] ?? 0));
+    var consumptionsWeek = initial[3] as List<ConsumptionRecordModel>;
+    var consumptionsMonth = initial[4] as List<ConsumptionRecordModel>;
 
     final storageIdsWeek = consumptionsWeek.map((c) => c.storageRecordId).toSet().toList();
     final storageIdsMonth = consumptionsMonth.map((c) => c.storageRecordId).toSet().toList();
     final allStorageIds = {...storageIdsWeek, ...storageIdsMonth}.toList();
     final relatedStorages = await storageRepo.getByIds(allStorageIds);
     final storageMap = {for (final storage in relatedStorages) storage.id: storage};
-    final smallOptions = await smallItemRepo.getAll();
+    final smallOptions = initial[5] as List<StorageSmallItemOption>;
     var smallIdToName = {for (var o in smallOptions) o.id: o.name};
 
     consumptionsWeek =
@@ -165,11 +181,9 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
         (_, s) => !DemoMode.includeForUser(email, DemoMode.isDemoStorage(s)));
     smallIdToName = DemoMode.filterSmallItemNames(email, smallIdToName);
 
-    var storagesInRangeWeek =
-        await storageRepo.getByStorageDateRange(weekStart, weekEnd);
+    var storagesInRangeWeek = initial[6] as List<StorageRecordModel>;
     storagesInRangeWeek = DemoMode.filterStorages(email, storagesInRangeWeek);
-    var purchasesInRangeWeek =
-        await purchaseRepo.getByDateRange(weekStart, weekEnd);
+    var purchasesInRangeWeek = initial[7] as List<InventoryPurchaseRecordModel>;
     purchasesInRangeWeek = DemoMode.filterInventoryPurchases(
       email,
       purchasesInRangeWeek,
@@ -211,8 +225,10 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
       }
     }
 
+    if (!context.mounted || auth.user?.id != owner || cache.revision != revision ||
+        _analyticsPreloadKey(context) != key) return;
     cache.set(
-      _kAnalyticsPreloadCacheKey,
+      key,
       _AnalyticsPreloadResult(
         customers: sorted,
         depositByCustomer: depositByCustomer,
@@ -227,11 +243,11 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
         analyticsRangeEnd: weekEnd,
         calendarSelectedMonth: monthStart,
       ),
+      ttl: const Duration(seconds: 30),
     );
   } catch (e) {
     debugPrint('preloadStoreAnalyticsData failed: $e');
-    cache.set('analytics_preload_failed', true);
-    // 预加载失败不影响进入首页，分析页进入时会提示并支持重试
+    // 进入分析页时正常加载，不把后台失败变成需要用户额外点击的错误。
   }
 }
 
@@ -451,9 +467,16 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
   Map<String, double> _depositByCustomer = {};
   List<CustomerModel> _birthdayThisWeek = [];
   List<CustomerModel> _birthdayThisMonth = [];
+  bool _hasLoaded = false;
   bool _loading = true;
   String? _error;
   bool _loadInProgress = false;
+  int _summaryLoadEpoch = 0;
+  int _calendarLoadEpoch = 0;
+  String? _analyticsError;
+  String? _calendarError;
+  String? _lastSummaryRange;
+  bool _calendarHasLoaded = false;
   bool _rankingExpanded = false;
   late final DataRefreshNotifier _refreshNotifier;
 
@@ -566,6 +589,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
   }
 
   void _applySummaryFromCache(_PeriodSummaryData data) {
+    _analyticsError = null;
+    _lastSummaryRange = '${_analyticsRangeStart.year}/${_analyticsRangeStart.month}/${_analyticsRangeStart.day} 至 ${_analyticsRangeEnd.month}/${_analyticsRangeEnd.day}';
     if (_selectedBigItemFilter != null && !data.byBigItem.containsKey(_selectedBigItemFilter)) {
       _selectedBigItemFilter = null;
     }
@@ -593,6 +618,13 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
 
   Future<void> _loadConsumptionAnalytics() async {
     if (!mounted) return;
+    final epoch = ++_summaryLoadEpoch;
+    final auth = context.read<AuthService>();
+    final owner = auth.user?.id;
+    final cache = context.read<DataCache>();
+    final revision = cache.revision;
+    bool current() => mounted && epoch == _summaryLoadEpoch &&
+        auth.user?.id == owner && cache.revision == revision;
     final (start, end) = _normalizeRange(_analyticsRangeStart, _analyticsRangeEnd);
     final cacheKey = _rangeCacheKey(start, end);
     final cached = _summaryCache[cacheKey];
@@ -604,6 +636,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       return;
     }
 
+    setState(() => _analyticsLoading = true);
     final consumptionRepo = context.read<ConsumptionRepository>();
     final storageRepo = context.read<StorageRepository>();
     final smallItemRepo = context.read<StorageSmallItemRepository>();
@@ -777,7 +810,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         );
       }
 
-      if (mounted) {
+      if (current()) {
         final periodData = _PeriodSummaryData(
           all: summaryAll,
           byBigItem: byBigItem,
@@ -791,21 +824,10 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           _analyticsLoading = false;
         });
       }
-    } catch (_) {
-      if (mounted) {
+    } catch (e) {
+      if (current()) {
         setState(() {
-          _consumptionTotal = 0;
-          _consumptionCount = 0;
-          _purchaseTotal = 0;
-          _purchaseRecords = [];
-          _bigItemCounts = {};
-          _smallItemCounts = {};
-          _contributingStorages = [];
-          _bigItemConsumptions = {};
-          _smallItemConsumptions = {};
-          _consumptionStorageMap = {};
-          _consumptionSmallNames = {};
-          _bigItemFilterOptions = ['全部', '其他', ..._allBigItemNamesFromRepo];
+          _analyticsError = toUserFriendlyError(e);
           _analyticsLoading = false;
         });
       }
@@ -1065,6 +1087,13 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
 
   Future<void> _loadCalendarData() async {
     if (!mounted) return;
+    final epoch = ++_calendarLoadEpoch;
+    final auth = context.read<AuthService>();
+    final owner = auth.user?.id;
+    final cache = context.read<DataCache>();
+    final revision = cache.revision;
+    bool current() => mounted && epoch == _calendarLoadEpoch &&
+        auth.user?.id == owner && cache.revision == revision;
     final start = DateTime(_calendarSelectedMonth.year, _calendarSelectedMonth.month, 1);
     final end = DateTime(_calendarSelectedMonth.year, _calendarSelectedMonth.month + 1, 0);
     final cacheKey = 'month_${start.year}-${start.month.toString().padLeft(2, '0')}';
@@ -1076,6 +1105,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         _calendarSmallNames = Map.from(cached.smallNames);
         _calendarRangeStart = start;
         _calendarRangeEnd = end;
+        _calendarHasLoaded = true;
+        _calendarError = null;
         _calendarLoading = false;
       });
       return;
@@ -1083,7 +1114,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
 
     setState(() => _calendarLoading = true);
     try {
-      final consumptionRepo = context.read<ConsumptionRepository>();
+      setState(() => _calendarLoading = true);
+    final consumptionRepo = context.read<ConsumptionRepository>();
       final storageRepo = context.read<StorageRepository>();
       final smallItemRepo = context.read<StorageSmallItemRepository>();
       var consumptions = await consumptionRepo.getByDateRange(start, end);
@@ -1111,7 +1143,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         list.sort((a, b) => a.consumptionDate.compareTo(b.consumptionDate));
       }
 
-      if (mounted) {
+      if (current()) {
         _calendarCache[cacheKey] = _CachedCalendarData(
           byDay: Map.from(byDay),
           storageMap: Map.from(storageMap),
@@ -1123,15 +1155,15 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           _calendarSmallNames = smallNames;
           _calendarRangeStart = start;
           _calendarRangeEnd = end;
+          _calendarHasLoaded = true;
+          _calendarError = null;
           _calendarLoading = false;
         });
       }
-    } catch (_) {
-      if (mounted) {
+    } catch (e) {
+      if (current()) {
         setState(() {
-          _calendarByDay = {};
-          _calendarStorageMap = {};
-          _calendarSmallNames = {};
+          _calendarError = toUserFriendlyError(e);
           _calendarLoading = false;
         });
       }
@@ -1275,12 +1307,15 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool forceRefresh = false}) async {
     if (!mounted) return;
+    if (forceRefresh) {
+      context.read<RepositoryReadCache?>()?.clear();
+      context.read<DataCache>().removeByPrefix('analytics_preload');
+    }
     final cache = context.read<DataCache>();
-    final preload = cache.get<_AnalyticsPreloadResult>(_kAnalyticsPreloadCacheKey);
+    final preload = cache.take<_AnalyticsPreloadResult>(_analyticsPreloadKey(context));
     if (preload != null) {
-      cache.remove(_kAnalyticsPreloadCacheKey);
       _summaryCache[preload.periodSummaryCacheKey] = preload.periodSummary;
       _calendarCache[preload.calendarCacheKey] = preload.calendarData;
       _analyticsRangeStart = preload.analyticsRangeStart;
@@ -1299,29 +1334,29 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       _calendarRangeEnd = DateTime(preload.calendarSelectedMonth.year, preload.calendarSelectedMonth.month + 1, 0);
       if (mounted) {
         setState(() {
+          _hasLoaded = true;
           _loading = false;
           _error = null;
           _analyticsLoading = false;
+          _calendarHasLoaded = true;
+          _calendarError = null;
           _calendarLoading = false;
         });
       }
       return;
     }
-    // 预加载失败时提示用户并支持手动重试
-    final preloadFailed = cache.get<bool>('analytics_preload_failed') == true;
-    if (preloadFailed) {
-      cache.remove('analytics_preload_failed');
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = '预加载失败，请点击重试';
-        });
-      }
+    if (_loadInProgress) {
+      _pendingRefreshFromNotify = true;
       return;
     }
-    if (_loadInProgress) return;
     _loadInProgress = true;
+    final auth = context.read<AuthService>();
+    final owner = auth.user?.id;
+    final revision = cache.revision;
+    bool current() => mounted && auth.user?.id == owner && cache.revision == revision;
 
+    _summaryLoadEpoch++;
+    _calendarLoadEpoch++;
     _summaryCache.clear();
     _calendarCache.clear();
     final customerRepo = context.read<CustomerRepository>();
@@ -1393,8 +1428,9 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         }
       }
 
-      if (mounted) {
+      if (current()) {
         setState(() {
+          _hasLoaded = true;
           _customers = sorted;
           _depositByCustomer = depositByCustomer;
           _birthdayThisWeek = birthdayThisWeek;
@@ -1402,11 +1438,10 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           _allBigItemNamesFromRepo = bigOptions.map((o) => o.name).toList();
           _loading = false;
         });
-        await _loadConsumptionAnalytics();
-        await _loadCalendarData();
+        await Future.wait([_loadConsumptionAnalytics(), _loadCalendarData()]);
       }
     } catch (e) {
-      if (mounted) {
+      if (current()) {
         setState(() {
           _error = toUserFriendlyError(e);
           _loading = false;
@@ -1414,6 +1449,10 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       }
     } finally {
       _loadInProgress = false;
+      if (mounted && _pendingRefreshFromNotify && ModalRoute.of(context)?.isCurrent == true) {
+        _pendingRefreshFromNotify = false;
+        _load();
+      }
     }
   }
 
@@ -1479,25 +1518,25 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       _lastRouteCurrent = false;
     }
 
-    if (_loading) {
+    if (_loading && !_hasLoaded) {
       return const Center(child: FullPageLoadingPlaceholder());
     }
     _scrollToTargetIfNeeded();
-    if (_error != null) {
+    if (_error != null && !_hasLoaded) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(_error!, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
             const SizedBox(height: 16),
-            FilledButton(onPressed: _load, child: const Text('重试')),
+            FilledButton(onPressed: () => _load(forceRefresh: true), child: const Text('重试')),
           ],
         ),
       );
     }
 
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: () => _load(forceRefresh: true),
       child: SingleChildScrollView(
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
@@ -1505,6 +1544,11 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (_loading) const LinearProgressIndicator(),
+            if (_error != null) MaterialBanner(
+              content: Text('刷新失败，显示上次加载的数据。$_error'),
+              actions: [TextButton(onPressed: () => _load(forceRefresh: true), child: const Text('重试'))],
+            ),
             Text('周期汇总', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
             Card(
@@ -1629,7 +1673,12 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
               ),
             ),
             const SizedBox(height: 16),
+            if (_analyticsError != null) MaterialBanner(
+              content: Text('周期汇总加载失败。${_lastSummaryRange == null ? '当前数据尚未加载。' : '显示 $_lastSummaryRange 上次成功的数据。'}$_analyticsError'),
+              actions: [TextButton(onPressed: _loadConsumptionAnalytics, child: const Text('重试周期汇总'))],
+            ),
             // 第三级：经营金额（储值、进货）+ 大项/小项消费次数
+            if (_analyticsError == null || _lastSummaryRange != null) ...[
             Card(
               child: InkWell(
                 onTap: _analyticsLoading || _contributingStorages.isEmpty
@@ -1844,6 +1893,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
               ),
             ),
             const SizedBox(height: 24),
+            ],
             Text('日历看板', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
             const SizedBox(height: 12),
@@ -1907,12 +1957,18 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
                 ],
               ),
             const SizedBox(height: 12),
+            if (_calendarError != null) MaterialBanner(
+              content: Text('日历加载失败。${_calendarHasLoaded ? '显示 ${_calendarRangeStart.year}年${_calendarRangeStart.month}月上次成功的数据。' : '当前日历尚未加载。'}$_calendarError'),
+              actions: [TextButton(onPressed: _loadCalendarData, child: const Text('重试日历'))],
+            ),
             _calendarLoading
                 ? const Padding(
                     padding: EdgeInsets.symmetric(vertical: 24),
                     child: Center(child: CircularProgressIndicator()),
                   )
-                : _MonthCalendarGrid(
+                : !_calendarHasLoaded
+                    ? const SizedBox.shrink()
+                    : _MonthCalendarGrid(
                         rangeStart: _calendarRangeStart,
                         rangeEnd: _calendarRangeEnd,
                         byDay: _calendarByDay,

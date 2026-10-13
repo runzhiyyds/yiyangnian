@@ -3,25 +3,27 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/config.dart';
-import '../../core/data_refresh.dart';
 import '../../core/demo_mode.dart';
 import '../../core/update_prompt.dart';
 import '../../core/update_service.dart';
 import '../auth/auth_service.dart';
-import '../tree/tree_data_provider.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
-  Future<void> _signOutAndGoLogin(
-    BuildContext context, {
-    required bool switchAccount,
-  }) async {
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  bool _signingOut = false;
+  Future<void> _signOutAndGoLogin(BuildContext context) async {
+    if (_signingOut) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(switchAccount ? '切换账号' : '退出登录'),
-        content: Text(switchAccount ? '将退出当前账号，随后可使用其他账号登录。' : '确定退出当前账号吗？'),
+        title: const Text('退出登录'),
+        content: const Text('确定退出当前账号吗？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -35,11 +37,19 @@ class SettingsScreen extends StatelessWidget {
       ),
     );
     if (ok != true || !context.mounted) return;
-    context.read<DataRefreshNotifier>().notifyDataChanged();
-    context.read<TreeDataProvider>().reset();
-    await context.read<AuthService>().signOut();
-    if (!context.mounted) return;
-    context.go('/login');
+    setState(() => _signingOut = true);
+    try {
+      await context.read<AuthService>().signOut();
+      if (context.mounted) context.go('/login');
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('退出未完成，请重试')));
+      }
+    } finally {
+      if (mounted) setState(() => _signingOut = false);
+    }
   }
 
   @override
@@ -72,16 +82,15 @@ class SettingsScreen extends StatelessWidget {
           ),
         ListTile(
           leading: const Icon(Icons.logout),
-          title: const Text('退出登录'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _signOutAndGoLogin(context, switchAccount: false),
-        ),
-        ListTile(
-          leading: const Icon(Icons.swap_horiz),
-          title: const Text('切换账号'),
-          subtitle: const Text('退出后使用其他邮箱登录'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _signOutAndGoLogin(context, switchAccount: true),
+          title: Text(_signingOut ? '正在退出…' : '退出登录'),
+          trailing: _signingOut
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.chevron_right),
+          onTap: _signingOut ? null : () => _signOutAndGoLogin(context),
         ),
         const Divider(),
         ListTile(

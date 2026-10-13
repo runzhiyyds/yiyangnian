@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -7,6 +8,8 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../router.dart';
+import 'config.dart';
+import 'network/supabase_http_client.dart';
 
 /// 处理后台消息的顶层函数（必须是顶层，并加入口点标记）
 @pragma('vm:entry-point')
@@ -18,20 +21,55 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 class PushNotificationService {
   static final FirebaseMessaging _messaging = FirebaseMessaging.instance;
 
-  static Future<void> syncCurrentDevice() => _refreshAndUploadToken();
+  static String? _deviceToken;
+  static Future<void> _deviceOperations = Future<void>.value();
 
-  static Future<void> releaseCurrentDevice() async {
-    final client = Supabase.instance.client;
-    if (client.auth.currentUser == null) return;
+  static Future<void> _enqueue(Future<void> Function() work) {
+    final next = _deviceOperations
+        .catchError((Object _) {})
+        .then((_) => work());
+    _deviceOperations = next;
+    return next;
+  }
+
+  static Future<void> syncCurrentDevice({SupabaseClient? client}) =>
+      _refreshAndUploadToken(client: client);
+
+  static Future<void> releaseCurrentDevice({SupabaseClient? client}) async {
+    if (!Config.isSupabaseConfigured) return;
+    final current = client ?? Supabase.instance.client;
+    final jwt = current.auth.currentSession?.accessToken;
+    final token = _deviceToken;
+    // Never request an unavailable FCM token while the user is logging out.
+    if (jwt == null || token == null) return;
+    await _enqueue(
+      () =>
+          _postDeviceRpc('release_push_device', {'p_device_token': token}, jwt),
+    );
+  }
+
+  static Future<void> _postDeviceRpc(
+    String function,
+    Map<String, String> body,
+    String jwt,
+  ) async {
+    final transport = SupabaseHttpClient(timeout: const Duration(seconds: 3));
     try {
-      final token = await _messaging.getToken();
-      if (token == null) return;
-      await client.rpc(
-        'release_push_device',
-        params: {'p_device_token': token},
+      final response = await transport.post(
+        Uri.parse('${Config.supabaseUrl}/rest/v1/rpc/$function'),
+        headers: {
+          'apikey': Config.supabaseAnonKey,
+          'authorization': 'Bearer $jwt',
+          'content-type': 'application/json',
+        },
+        body: jsonEncode(body),
       );
+      if (response.statusCode >= 400)
+        debugPrint('Push RPC $function failed: ${response.statusCode}');
     } catch (e) {
-      debugPrint('Failed to release push token: $e');
+      debugPrint('Push RPC $function skipped: ${e.runtimeType}');
+    } finally {
+      transport.close();
     }
   }
 
@@ -87,11 +125,13 @@ class PushNotificationService {
     }
   }
 
-  static Future<void> _refreshAndUploadToken() async {
+  static Future<void> _refreshAndUploadToken({SupabaseClient? client}) async {
     try {
-      final token = await _messaging.getToken();
+      final token = await _messaging.getToken().timeout(
+        const Duration(seconds: 3),
+      );
       if (token != null) {
-        await _uploadToken(token);
+        await _uploadToken(token, client: client);
       }
     } catch (e, stack) {
       // 例如在没有 Google Play 服务的华为设备上：MISSING_INSTANCEID_SERVICE
@@ -101,18 +141,21 @@ class PushNotificationService {
     }
   }
 
-  static Future<void> _uploadToken(String token) async {
-    final client = Supabase.instance.client;
-    final ownerId = client.auth.currentUser?.id;
-    if (ownerId == null) return;
-    try {
-      await client.rpc(
-        'claim_push_device',
-        params: {'p_device_token': token, 'p_platform': 'android'},
-      );
-    } catch (e) {
-      debugPrint('Failed to upload push token: $e');
-    }
+  static Future<void> _uploadToken(
+    String token, {
+    SupabaseClient? client,
+  }) async {
+    _deviceToken = token;
+    final current = client ?? Supabase.instance.client;
+    final jwt = current.auth.currentSession?.accessToken;
+    if (jwt == null) return;
+    await _enqueue(() async {
+      if (current.auth.currentSession?.accessToken != jwt) return;
+      await _postDeviceRpc('claim_push_device', {
+        'p_device_token': token,
+        'p_platform': 'android',
+      }, jwt);
+    });
   }
 
   static void _handleNotificationNavigation(RemoteMessage message) {

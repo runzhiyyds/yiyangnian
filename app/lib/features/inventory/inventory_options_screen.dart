@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/error_message.dart';
+import '../../core/repository_read_cache.dart';
+import '../tree/tree_data_provider.dart';
+import '../analytics/store_analytics_screen.dart';
 import '../../widgets/confirm_dialog.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/loading_placeholder.dart';
@@ -33,6 +38,8 @@ class InventoryOptionsScreen extends StatefulWidget {
 }
 
 class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
+  Timer? _preloadTimer;
+  bool _preloadScheduled = false;
   bool _loading = true;
   bool _hasLoaded = false;
   bool _loadInProgress = false;
@@ -69,6 +76,8 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
     if (!mounted || accountId == _observedAccountId) return;
     _observedAccountId = accountId;
     setState(() {
+      _preloadTimer?.cancel();
+      _preloadScheduled = false;
       _hasLoaded = false;
       _loading = true;
       _error = null;
@@ -96,6 +105,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
 
   @override
   void dispose() {
+    _preloadTimer?.cancel();
     _refreshNotifier.removeListener(_onDataChanged);
     _authService.removeListener(_onAccountChanged);
     _smallItemSearchController.dispose();
@@ -115,8 +125,9 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
     }
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool forceRefresh = false}) async {
     if (_loadInProgress || !mounted) return;
+    if (forceRefresh) context.read<RepositoryReadCache?>()?.clear();
     _loadInProgress = true;
     final accountId = _authService.user?.id;
     bool isCurrentAccount() => mounted && _authService.user?.id == accountId;
@@ -250,6 +261,20 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
         _loadedAccountId = accountId;
         _loading = false;
       });
+      if (!_preloadScheduled && accountId != null) {
+        _preloadScheduled = true;
+        _preloadTimer = Timer(const Duration(seconds: 1), () {
+          if (!isCurrentAccount()) return;
+          final tree = context.read<TreeDataProvider?>();
+          if (tree == null) return;
+          unawaited(Future.wait([
+            tree.load(context),
+            preloadStoreAnalyticsData(context),
+          ]).then<void>((_) {}).catchError((Object e) {
+            debugPrint('Background preload skipped: ${e.runtimeType}');
+          }));
+        });
+      }
     } catch (e) {
       if (!isCurrentAccount()) return;
       setState(() {
@@ -323,7 +348,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       );
       if (!mounted) return;
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
-      await _load();
+      await _load(forceRefresh: true);
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -411,7 +436,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       await retryOnFailure(() => repo.updateBigItem(opt.id, newBigId));
       if (!mounted) return;
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
-      await _load();
+      await _load(forceRefresh: true);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -460,7 +485,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       await retryOnFailure(() => repo.update(opt.id, name));
       if (!mounted) return;
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
-      await _load();
+      await _load(forceRefresh: true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -510,7 +535,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       await client.from('storage_small_item_options').delete().eq('id', opt.id);
       if (!mounted) return;
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
-      await _load();
+      await _load(forceRefresh: true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -558,7 +583,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
                 await context.push('/inventory/item/${item.id}');
                 if (!context.mounted) return;
                 context.read<DataRefreshNotifier>().invalidateInventory();
-                await _load();
+                await _load(forceRefresh: true);
               },
             ),
           );
@@ -662,7 +687,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
                 Text(_error!, textAlign: TextAlign.center,
                     style: TextStyle(color: Theme.of(context).colorScheme.error)),
                 const SizedBox(height: 16),
-                FilledButton.icon(onPressed: _load, icon: const Icon(Icons.refresh),
+                FilledButton.icon(onPressed: () => _load(forceRefresh: true), icon: const Icon(Icons.refresh),
                     label: const Text('重试')),
               ],
             ),
@@ -693,19 +718,19 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
 
     return Scaffold(
       body: RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: () => _load(forceRefresh: true),
         child: Column(
         children: [
           if (_loading) const LinearProgressIndicator(),
           if (_error != null)
             MaterialBanner(
               content: Text('$_error\n正在显示上次成功加载的库存。'),
-              actions: [TextButton(onPressed: _loading ? null : _load,
+              actions: [TextButton(onPressed: _loading ? null : () => _load(forceRefresh: true),
                   child: const Text('重试'))],
             ),
           Align(
             alignment: Alignment.centerRight,
-            child: TextButton.icon(onPressed: _loading ? null : _load,
+            child: TextButton.icon(onPressed: _loading ? null : () => _load(forceRefresh: true),
                 icon: const Icon(Icons.refresh),
                 label: Text(_loading ? '刷新中…' : '刷新库存')),
           ),
@@ -821,7 +846,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       queryParameters: {'name': smallItemName},
     );
     await context.push(uri.toString());
-    if (mounted) await _load();
+    if (mounted) await _load(forceRefresh: true);
   }
 
   Widget _buildLinkedDetailPane(BuildContext context) {

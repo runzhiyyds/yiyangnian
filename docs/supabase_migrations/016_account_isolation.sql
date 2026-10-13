@@ -448,25 +448,26 @@ AS $$
 DECLARE
   item_id INT;
 BEGIN
-  IF TG_TABLE_NAME = 'inventory_purchase_records' AND
-      (CARDINALITY(COALESCE(NEW.storage_small_item_ids, ARRAY[]::INT[])) = 0 OR
+  -- NEW 是动态 record；必须先分支，再访问只有进货表拥有的 quantities。
+  -- AND 不保证避开 PL/pgSQL 对不存在字段的表达式准备。
+  IF TG_TABLE_NAME = 'inventory_purchase_records' THEN
+    IF CARDINALITY(COALESCE(NEW.storage_small_item_ids, ARRAY[]::INT[])) = 0 OR
        CARDINALITY(COALESCE(NEW.storage_big_items, ARRAY[]::TEXT[])) <>
          CARDINALITY(COALESCE(NEW.storage_small_item_ids, ARRAY[]::INT[])) OR
        CARDINALITY(COALESCE(NEW.storage_small_item_ids, ARRAY[]::INT[])) <>
-         CARDINALITY(COALESCE(NEW.quantities, ARRAY[]::INT[]))) THEN
-    RAISE EXCEPTION '进货大项、小项和数量必须一一对应';
-  END IF;
+         CARDINALITY(COALESCE(NEW.quantities, ARRAY[]::INT[])) THEN
+      RAISE EXCEPTION '进货大项、小项和数量必须一一对应';
+    END IF;
 
-  -- 历史进货单可能仍保存已删除小项的原 ID。只要账号和三组商品数组完全未变，
-  -- 允许用户修改日期、金额、备注或执行撤销；一旦修改商品或数量，就必须先
-  -- 选择当前账号下仍存在的小项，防止继续产生新的悬空引用。
-  IF TG_TABLE_NAME = 'inventory_purchase_records'
-    AND TG_OP = 'UPDATE'
-    AND NEW.owner_id IS NOT DISTINCT FROM OLD.owner_id
-    AND NEW.storage_big_items IS NOT DISTINCT FROM OLD.storage_big_items
-    AND NEW.storage_small_item_ids IS NOT DISTINCT FROM OLD.storage_small_item_ids
-    AND NEW.quantities IS NOT DISTINCT FROM OLD.quantities THEN
-    RETURN NEW;
+    -- 保留历史进货单只改日期、金额、备注和撤销的兼容口径。
+    IF TG_OP = 'UPDATE' THEN
+      IF NEW.owner_id IS NOT DISTINCT FROM OLD.owner_id
+        AND NEW.storage_big_items IS NOT DISTINCT FROM OLD.storage_big_items
+        AND NEW.storage_small_item_ids IS NOT DISTINCT FROM OLD.storage_small_item_ids
+        AND NEW.quantities IS NOT DISTINCT FROM OLD.quantities THEN
+        RETURN NEW;
+      END IF;
+    END IF;
   END IF;
 
   FOREACH item_id IN ARRAY COALESCE(NEW.storage_small_item_ids, ARRAY[]::INT[])

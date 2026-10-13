@@ -36,11 +36,11 @@ class _TreeScreenState extends State<TreeScreen> {
   /// [forceRefresh] 为 true 时忽略缓存重新请求（如下拉刷新、数据变更后）
   Future<void> _ensureLoad({bool forceRefresh = false}) async {
     if (!mounted) return;
-    context.read<TreeDataProvider>().load(context, forceRefresh: forceRefresh);
+    await context.read<TreeDataProvider>().load(context, forceRefresh: forceRefresh);
   }
 
   void _onDataChanged() {
-    if (mounted) context.read<TreeDataProvider>().load(context, forceRefresh: true);
+    if (mounted) context.read<TreeDataProvider>().load(context, forceRefresh: true, invalidateReads: false);
   }
 
   @override
@@ -53,10 +53,10 @@ class _TreeScreenState extends State<TreeScreen> {
   @override
   Widget build(BuildContext context) {
     final treeData = context.watch<TreeDataProvider>();
-    if (treeData.loading) {
+    if (treeData.loading && !treeData.hasLoaded) {
       return const Center(child: FullPageLoadingPlaceholder());
     }
-    if (treeData.error != null) {
+    if (treeData.error != null && !treeData.hasLoaded) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -70,7 +70,7 @@ class _TreeScreenState extends State<TreeScreen> {
               ),
               const SizedBox(height: 20),
               FilledButton(
-                onPressed: () => _ensureLoad(),
+                onPressed: () => _ensureLoad(forceRefresh: true),
                 child: const Text('重试'),
               ),
               const SizedBox(height: 12),
@@ -97,6 +97,11 @@ class _TreeScreenState extends State<TreeScreen> {
         onRefresh: () => _ensureLoad(forceRefresh: true),
         child: CustomScrollView(
           slivers: [
+            if (treeData.loading) const SliverToBoxAdapter(child: LinearProgressIndicator()),
+            if (treeData.error != null) SliverToBoxAdapter(child: MaterialBanner(
+              content: Text('刷新失败，显示上次加载的客户信息。${treeData.error}'),
+              actions: [TextButton(onPressed: () => _ensureLoad(forceRefresh: true), child: const Text('重试'))],
+            )),
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),

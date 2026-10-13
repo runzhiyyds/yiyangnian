@@ -24,6 +24,12 @@ class _YiyangnianAppState extends State<YiyangnianApp> {
   }
 
   @override
+  void dispose() {
+    _router?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: '颐养年店铺管理',

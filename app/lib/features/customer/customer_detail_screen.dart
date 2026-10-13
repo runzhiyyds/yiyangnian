@@ -88,6 +88,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     if (!mounted) return;
     final name = widget.customerName;
     final cache = context.read<DataCache>();
+    final revision = cache.revision;
+    bool current() => mounted && cache.revision == revision;
     final cached = cache.get<_CustomerDetailCache>(_cacheKey(name));
     if (cached != null) {
       setState(() {
@@ -123,11 +125,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         customerRepo.getByName(name),
         storageRepo.getByCustomer(name),
         smallItemRepo.getAll(),
-        customerRepo.getTotalDeposit(name),
-        customerRepo.getEarliestStorageDate(name),
-        customerRepo.getTotalRemainingConsumption(name),
-        customerRepo.getStorageCodes(name),
       ]));
+      if (!current()) return;
       final customer = results[0] as CustomerModel?;
       if (customer == null) {
         if (mounted) context.pop();
@@ -135,21 +134,25 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       }
       final storages = results[1] as List<StorageRecordModel>;
       final options = results[2] as List;
-      final totalDeposit = results[3] as double;
-      final earliest = results[4] as DateTime?;
-      final totalRemaining = results[5] as int;
-      final codes = results[6] as List<String>;
       final opts = options as List<StorageSmallItemOption>;
       final nameMap = {for (var o in opts) o.id: o.name};
+      final allConsumptions = await consumptionRepo.getByStorageIds(storages.map((s) => s.id));
+      if (!current()) return;
+      final grouped = <int, List<ConsumptionRecordModel>>{for (final s in storages) s.id: []};
+      for (final consumption in allConsumptions) {
+        grouped[consumption.storageRecordId]?.add(consumption);
+      }
+      final totalDeposit = storages.fold<double>(0, (total, s) => total + s.amount);
+      final totalRemaining = storages.fold<int>(0, (total, s) => total + s.totalCount) - allConsumptions.length;
+      DateTime? earliest;
+      for (final storage in storages) {
+        if (earliest == null || storage.storageDate.isBefore(earliest)) earliest = storage.storageDate;
+      }
+      final codes = storages.map((s) => s.code).toList();
 
-      if (mounted) {
-        // 加载每条储值对应的消费记录，用于右侧列表
+      if (current()) {
         _consumptionsByStorage.clear();
-        for (final s in storages) {
-          final list = await consumptionRepo.getByStorage(s.id);
-          _consumptionsByStorage[s.id] = list;
-        }
-
+        _consumptionsByStorage.addAll(grouped);
         cache.set(
           _cacheKey(name),
           _CustomerDetailCache(
@@ -182,7 +185,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (current()) {
         setState(() {
           _error = toUserFriendlyError(e);
           _loading = false;
@@ -190,6 +193,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       }
     } finally {
       _loadInProgress = false;
+      if (mounted && cache.revision != revision) _load();
     }
   }
 

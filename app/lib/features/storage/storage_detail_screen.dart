@@ -83,6 +83,8 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
     if (!mounted) return;
     final id = widget.storageId;
     final cache = context.read<DataCache>();
+    final revision = cache.revision;
+    bool current() => mounted && cache.revision == revision;
     final cached = cache.get<_StorageDetailCache>(_cacheKey(id));
     if (cached != null) {
       setState(() {
@@ -111,20 +113,20 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       final results = await retryOnFailure(() => Future.wait([
         storageRepo.getById(id),
         consumptionRepo.getByStorage(id),
-        storageRepo.getRemainingCount(id),
         smallItemRepo.getAll(),
       ]));
+      if (!current()) return;
       final storage = results[0] as StorageRecordModel?;
       if (storage == null) {
         if (mounted) context.pop();
         return;
       }
       final consumptions = results[1] as List<ConsumptionRecordModel>;
-      final remaining = results[2] as int;
-      final options = results[3] as List<StorageSmallItemOption>;
+      final remaining = storage.totalCount - consumptions.length;
+      final options = results[2] as List<StorageSmallItemOption>;
       final nameMap = {for (var o in options) o.id: o.name};
 
-      if (mounted) {
+      if (current()) {
         cache.set(
           _cacheKey(id),
           _StorageDetailCache(
@@ -143,7 +145,7 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (current()) {
         setState(() {
           _error = toUserFriendlyError(e);
           _loading = false;
@@ -151,6 +153,7 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       }
     } finally {
       _loadInProgress = false;
+      if (mounted && cache.revision != revision) _load();
     }
   }
 
