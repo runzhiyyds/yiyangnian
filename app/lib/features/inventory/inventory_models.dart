@@ -9,6 +9,19 @@ class InventoryPurchaseRecordModel {
   final double totalAmount;
   final String? remark;
   final DateTime? createdAt;
+  final DateTime? occurredAt;
+  final bool occurredAtEstimated;
+  final DateTime? voidedAt;
+  final String? voidReason;
+
+  bool get isVoided => voidedAt != null;
+
+  /// 三组历史数组必须一一对应；不对齐时禁止编辑，避免静默丢失商品。
+  bool get hasAlignedItems =>
+      storageBigItems.length == storageSmallItemIds.length &&
+      storageSmallItemIds.length == quantities.length;
+
+  int get itemCount => hasAlignedItems ? storageSmallItemIds.length : 0;
 
   InventoryPurchaseRecordModel({
     required this.id,
@@ -20,6 +33,10 @@ class InventoryPurchaseRecordModel {
     this.totalAmount = 0,
     this.remark,
     this.createdAt,
+    this.occurredAt,
+    this.occurredAtEstimated = false,
+    this.voidedAt,
+    this.voidReason,
   });
 
   factory InventoryPurchaseRecordModel.fromJson(Map<String, dynamic> json) {
@@ -66,6 +83,12 @@ class InventoryPurchaseRecordModel {
       totalAmount: (json['total_amount'] as num?)?.toDouble() ?? 0,
       remark: json['remark'] as String?,
       createdAt: createdAt,
+      occurredAt: _readDateTime(json['occurred_at']),
+      occurredAtEstimated:
+          json['occurred_at_is_estimated'] as bool? ??
+          json['occurred_at'] == null,
+      voidedAt: _readDateTime(json['voided_at']),
+      voidReason: json['void_reason'] as String?,
     );
   }
 
@@ -77,6 +100,11 @@ class InventoryPurchaseRecordModel {
       'storage_small_item_ids': storageSmallItemIds,
       'quantities': quantities,
       'total_amount': totalAmount,
+      'occurred_at': combineInventoryDateAndTime(
+        purchaseDate,
+        occurredAt,
+      ).toUtc().toIso8601String(),
+      'occurred_at_is_estimated': occurredAtEstimated,
       if (remark != null && remark!.isNotEmpty) 'remark': remark,
     };
   }
@@ -89,9 +117,16 @@ class InventoryConsumptionRecordModel {
   final int storageSmallItemId;
   final int quantity;
   final String? remark;
+
   /// 由新建储值自动出库时关联的储值记录 ID（需 DB 迁移列 source_storage_record_id）
   final int? sourceStorageRecordId;
   final DateTime? createdAt;
+  final DateTime? occurredAt;
+  final bool occurredAtEstimated;
+  final DateTime? voidedAt;
+  final String? voidReason;
+
+  bool get isVoided => voidedAt != null;
 
   InventoryConsumptionRecordModel({
     required this.id,
@@ -101,6 +136,10 @@ class InventoryConsumptionRecordModel {
     this.remark,
     this.sourceStorageRecordId,
     this.createdAt,
+    this.occurredAt,
+    this.occurredAtEstimated = false,
+    this.voidedAt,
+    this.voidReason,
   });
 
   factory InventoryConsumptionRecordModel.fromJson(Map<String, dynamic> json) {
@@ -120,6 +159,12 @@ class InventoryConsumptionRecordModel {
       remark: json['remark'] as String?,
       sourceStorageRecordId: json['source_storage_record_id'] as int?,
       createdAt: createdAt,
+      occurredAt: _readDateTime(json['occurred_at']),
+      occurredAtEstimated:
+          json['occurred_at_is_estimated'] as bool? ??
+          json['occurred_at'] == null,
+      voidedAt: _readDateTime(json['voided_at']),
+      voidReason: json['void_reason'] as String?,
     );
   }
 
@@ -128,8 +173,14 @@ class InventoryConsumptionRecordModel {
       'consumption_date': consumptionDate.toIso8601String().split('T').first,
       'storage_small_item_id': storageSmallItemId,
       'quantity': quantity,
+      'occurred_at': combineInventoryDateAndTime(
+        consumptionDate,
+        occurredAt,
+      ).toUtc().toIso8601String(),
+      'occurred_at_is_estimated': occurredAtEstimated,
       if (remark != null && remark!.isNotEmpty) 'remark': remark,
-      if (sourceStorageRecordId != null) 'source_storage_record_id': sourceStorageRecordId,
+      if (sourceStorageRecordId != null)
+        'source_storage_record_id': sourceStorageRecordId,
     };
   }
 }
@@ -142,6 +193,12 @@ class InventorySuppInRecordModel {
   final int quantity;
   final String? remark;
   final DateTime? createdAt;
+  final DateTime? occurredAt;
+  final bool occurredAtEstimated;
+  final DateTime? voidedAt;
+  final String? voidReason;
+
+  bool get isVoided => voidedAt != null;
 
   InventorySuppInRecordModel({
     required this.id,
@@ -150,6 +207,10 @@ class InventorySuppInRecordModel {
     required this.quantity,
     this.remark,
     this.createdAt,
+    this.occurredAt,
+    this.occurredAtEstimated = false,
+    this.voidedAt,
+    this.voidReason,
   });
 
   factory InventorySuppInRecordModel.fromJson(Map<String, dynamic> json) {
@@ -168,6 +229,12 @@ class InventorySuppInRecordModel {
       quantity: json['quantity'] as int,
       remark: json['remark'] as String?,
       createdAt: createdAt,
+      occurredAt: _readDateTime(json['occurred_at']),
+      occurredAtEstimated:
+          json['occurred_at_is_estimated'] as bool? ??
+          json['occurred_at'] == null,
+      voidedAt: _readDateTime(json['voided_at']),
+      voidReason: json['void_reason'] as String?,
     );
   }
 
@@ -176,7 +243,33 @@ class InventorySuppInRecordModel {
       'supplement_date': supplementDate.toIso8601String().split('T').first,
       'storage_small_item_id': storageSmallItemId,
       'quantity': quantity,
+      'occurred_at': combineInventoryDateAndTime(
+        supplementDate,
+        occurredAt,
+      ).toUtc().toIso8601String(),
+      'occurred_at_is_estimated': occurredAtEstimated,
       if (remark != null && remark!.isNotEmpty) 'remark': remark,
     };
   }
+}
+
+DateTime? _readDateTime(dynamic value) {
+  if (value == null) return null;
+  return DateTime.tryParse(value.toString())?.toLocal();
+}
+
+/// 将用户选择的业务日期与原记录的时刻组合。
+/// 修改过去日期只改变时间线所在日期，不丢失同日内的先后顺序。
+DateTime combineInventoryDateAndTime(DateTime date, DateTime? time) {
+  final source = time?.toLocal() ?? DateTime.now();
+  return DateTime(
+    date.year,
+    date.month,
+    date.day,
+    source.hour,
+    source.minute,
+    source.second,
+    source.millisecond,
+    source.microsecond,
+  );
 }

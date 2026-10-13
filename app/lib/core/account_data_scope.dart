@@ -7,7 +7,7 @@ import '../features/storage_options/storage_small_item_repository.dart';
 
 /// 按登录账号隔离「演示域」与「正式域」数据视图。
 ///
-/// - 体验账号 [DemoCredentials.email]：仅见「演示-」前缀及 JH90/CZ90/XF90 编号数据
+/// - 体验账号 [DemoCredentials.email]：仅见「演示-」客户/商品关联数据
 /// - 其他账号：仅见正式数据，隐藏全部演示数据
 class AccountDataScope {
   AccountDataScope._();
@@ -47,25 +47,40 @@ class AccountDataScope {
   static bool isDemoCustomer(CustomerModel c) => isDemoTagged(c.name);
 
   static bool isDemoStorage(StorageRecordModel s) =>
-      isDemoTagged(s.customerName) || isDemoBusinessCode(s.code);
+      isDemoTagged(s.customerName);
 
   static bool isDemoConsumption(ConsumptionRecordModel c) =>
       isDemoBusinessCode(c.code);
 
-  static bool isDemoInventoryPurchase(InventoryPurchaseRecordModel p) =>
-      isDemoBusinessCode(p.code) || isDemoRemark(p.remark);
+  static bool isDemoInventoryPurchase(
+    InventoryPurchaseRecordModel p, {
+    Map<int, String> smallItemNames = const {},
+  }) {
+    // 演示数据种子曾将全局进货编号序列推进到 900xx，因此正式账号后续
+    // 新建的进货单也会是 JH90xxx。编号不是数据归属，必须优先以关联商品判断。
+    if (p.storageSmallItemIds.isNotEmpty && smallItemNames.isNotEmpty) {
+      final itemNames = p.storageSmallItemIds
+          .map((id) => smallItemNames[id])
+          .whereType<String>()
+          .toList();
+      if (itemNames.length == p.storageSmallItemIds.length) {
+        return itemNames.every(isDemoTagged);
+      }
+    }
+
+    // 只有历史记录无法解析关联商品时，才用备注/旧编号作兼容兜底。
+    return isDemoRemark(p.remark) || isDemoBusinessCode(p.code);
+  }
 
   static bool isDemoInventorySuppIn(
     InventorySuppInRecordModel r, {
     String? smallItemName,
-  }) =>
-      isDemoRemark(r.remark) || isDemoTagged(smallItemName);
+  }) => isDemoRemark(r.remark) || isDemoTagged(smallItemName);
 
   static bool isDemoInventoryConsumption(
     InventoryConsumptionRecordModel r, {
     String? smallItemName,
-  }) =>
-      isDemoRemark(r.remark) || isDemoTagged(smallItemName);
+  }) => isDemoRemark(r.remark) || isDemoTagged(smallItemName);
 
   static bool isDemoSmallItemOption(StorageSmallItemOption o) =>
       isDemoTagged(o.name);
@@ -76,80 +91,78 @@ class AccountDataScope {
     String? email,
     List<CustomerModel> customers,
   ) =>
-      customers
-          .where((c) => includeForUser(email, isDemoCustomer(c)))
-          .toList();
+      customers.where((c) => includeForUser(email, isDemoCustomer(c))).toList();
 
   static List<StorageRecordModel> filterStorages(
     String? email,
     List<StorageRecordModel> storages,
-  ) =>
-      storages
-          .where((s) => includeForUser(email, isDemoStorage(s)))
-          .toList();
+  ) => storages.where((s) => includeForUser(email, isDemoStorage(s))).toList();
 
   static List<ConsumptionRecordModel> filterConsumptions(
     String? email,
     List<ConsumptionRecordModel> consumptions,
     Map<int, StorageRecordModel> storageMap,
-  ) =>
-      consumptions.where((c) {
-        final storage = storageMap[c.storageRecordId];
-        final isDemo = isDemoConsumption(c) ||
-            (storage != null && isDemoStorage(storage));
-        return includeForUser(email, isDemo);
-      }).toList();
+  ) => consumptions.where((c) {
+    final storage = storageMap[c.storageRecordId];
+    // 消费编号和进货编号一样来自全局序列；只要父储值记录存在，
+    // 就应以父记录的客户归属为准。编号只用于无法找到父记录的历史兜底。
+    final isDemo = storage != null
+        ? isDemoStorage(storage)
+        : isDemoConsumption(c);
+    return includeForUser(email, isDemo);
+  }).toList();
 
   static List<StorageSmallItemOption> filterSmallItemOptions(
     String? email,
     List<StorageSmallItemOption> options,
-  ) =>
-      options
-          .where((o) => includeForUser(email, isDemoSmallItemOption(o)))
-          .toList();
+  ) => options
+      .where((o) => includeForUser(email, isDemoSmallItemOption(o)))
+      .toList();
 
   static Map<int, String> filterSmallItemNames(
     String? email,
     Map<int, String> names,
-  ) =>
-      {
-        for (final e in names.entries)
-          if (includeForUser(email, isDemoTagged(e.value))) e.key: e.value,
-      };
+  ) => {
+    for (final e in names.entries)
+      if (includeForUser(email, isDemoTagged(e.value))) e.key: e.value,
+  };
 
   static List<InventoryPurchaseRecordModel> filterInventoryPurchases(
     String? email,
-    List<InventoryPurchaseRecordModel> purchases,
-  ) =>
-      purchases
-          .where((p) => includeForUser(email, isDemoInventoryPurchase(p)))
-          .toList();
+    List<InventoryPurchaseRecordModel> purchases, {
+    Map<int, String> smallItemNames = const {},
+  }) => purchases
+      .where(
+        (p) => includeForUser(
+          email,
+          isDemoInventoryPurchase(p, smallItemNames: smallItemNames),
+        ),
+      )
+      .toList();
 
   static List<InventorySuppInRecordModel> filterInventorySuppIn(
     String? email,
     List<InventorySuppInRecordModel> records,
     Map<int, String> smallItemNames,
-  ) =>
-      records.where((r) {
-        final isDemo = isDemoInventorySuppIn(
-          r,
-          smallItemName: smallItemNames[r.storageSmallItemId],
-        );
-        return includeForUser(email, isDemo);
-      }).toList();
+  ) => records.where((r) {
+    final isDemo = isDemoInventorySuppIn(
+      r,
+      smallItemName: smallItemNames[r.storageSmallItemId],
+    );
+    return includeForUser(email, isDemo);
+  }).toList();
 
   static List<InventoryConsumptionRecordModel> filterInventoryConsumptions(
     String? email,
     List<InventoryConsumptionRecordModel> records,
     Map<int, String> smallItemNames,
-  ) =>
-      records.where((r) {
-        final isDemo = isDemoInventoryConsumption(
-          r,
-          smallItemName: smallItemNames[r.storageSmallItemId],
-        );
-        return includeForUser(email, isDemo);
-      }).toList();
+  ) => records.where((r) {
+    final isDemo = isDemoInventoryConsumption(
+      r,
+      smallItemName: smallItemNames[r.storageSmallItemId],
+    );
+    return includeForUser(email, isDemo);
+  }).toList();
 
   /// 客户一览：按账号域过滤客户、储值、消费、小项名称
   static ({
@@ -157,7 +170,8 @@ class AccountDataScope {
     Map<String, List<StorageRecordModel>> storagesByCustomer,
     Map<int, List<ConsumptionRecordModel>> consumptionsByStorage,
     Map<int, String> smallItemNames,
-  }) filterTreeScope({
+  })
+  filterTreeScope({
     required String? email,
     required List<CustomerModel> customers,
     required Map<String, List<StorageRecordModel>> storagesByCustomer,
@@ -170,8 +184,7 @@ class AccountDataScope {
     final scopedStorages = <String, List<StorageRecordModel>>{};
     for (final name in scopedNames) {
       final list = storagesByCustomer[name] ?? [];
-      scopedStorages[name] =
-          filterStorages(email, list);
+      scopedStorages[name] = filterStorages(email, list);
     }
 
     final scopedStorageIds = scopedStorages.values
@@ -219,7 +232,8 @@ class AccountDataScope {
     List<InventoryConsumptionRecordModel> consumptions,
     List<StorageSmallItemOption> smallOptions,
     Map<int, String> smallItemNames,
-  }) scopeInventoryRaw({
+  })
+  scopeInventoryRaw({
     required String? email,
     required List<InventoryPurchaseRecordModel> purchases,
     required List<InventorySuppInRecordModel> suppIn,
@@ -229,7 +243,11 @@ class AccountDataScope {
     final scopedSmallOptions = filterSmallItemOptions(email, smallOptions);
     final nameById = {for (final o in smallOptions) o.id: o.name};
     return (
-      purchases: filterInventoryPurchases(email, purchases),
+      purchases: filterInventoryPurchases(
+        email,
+        purchases,
+        smallItemNames: nameById,
+      ),
       suppIn: filterInventorySuppIn(email, suppIn, nameById),
       consumptions: filterInventoryConsumptions(email, consumptions, nameById),
       smallOptions: scopedSmallOptions,
@@ -249,35 +267,32 @@ class AccountDataScope {
       balanceBySmallItem[o.id] = 0;
     }
     for (final p in purchases) {
-      for (final id in p.storageSmallItemIds) {
-        balanceBySmallItem.putIfAbsent(id, () => 0);
-      }
-    }
-    for (final r in suppIn) {
-      balanceBySmallItem.putIfAbsent(r.storageSmallItemId, () => 0);
-    }
-    for (final r in consumptions) {
-      balanceBySmallItem.putIfAbsent(r.storageSmallItemId, () => 0);
-    }
-    for (final p in purchases) {
-      for (var i = 0;
-          i < p.storageSmallItemIds.length &&
-              i < p.storageBigItems.length &&
-              i < p.quantities.length;
-          i++) {
+      if (p.isVoided) continue;
+      for (
+        var i = 0;
+        i < p.storageSmallItemIds.length &&
+            i < p.storageBigItems.length &&
+            i < p.quantities.length;
+        i++
+      ) {
         final id = p.storageSmallItemIds[i];
-        if (id <= 0) continue;
-        balanceBySmallItem[id] =
-            (balanceBySmallItem[id] ?? 0) + p.quantities[i];
+        // 旧版允许删除仍被历史进货单引用的小项。原记录继续展示，但已删除
+        // 商品不能重新出现在当前库存中，也不能凭残留 ID 恢复余额。
+        if (id <= 0 || !balanceBySmallItem.containsKey(id)) continue;
+        balanceBySmallItem[id] = balanceBySmallItem[id]! + p.quantities[i];
       }
     }
     for (final r in suppIn) {
+      if (r.isVoided) continue;
+      if (!balanceBySmallItem.containsKey(r.storageSmallItemId)) continue;
       balanceBySmallItem[r.storageSmallItemId] =
-          (balanceBySmallItem[r.storageSmallItemId] ?? 0) + r.quantity;
+          balanceBySmallItem[r.storageSmallItemId]! + r.quantity;
     }
     for (final r in consumptions) {
+      if (r.isVoided) continue;
+      if (!balanceBySmallItem.containsKey(r.storageSmallItemId)) continue;
       balanceBySmallItem[r.storageSmallItemId] =
-          (balanceBySmallItem[r.storageSmallItemId] ?? 0) - r.quantity;
+          balanceBySmallItem[r.storageSmallItemId]! - r.quantity;
     }
     return balanceBySmallItem;
   }

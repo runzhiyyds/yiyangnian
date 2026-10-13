@@ -6,11 +6,8 @@ import '../../core/data_cache.dart';
 import '../../core/data_refresh.dart';
 import '../../core/error_message.dart';
 import '../../widgets/confirm_dialog.dart';
-import '../../core/theme.dart';
 import '../../widgets/loading_placeholder.dart';
-import '../../core/lunar_helper.dart';
 import '../../core/retry_helper.dart';
-import '../../widgets/lunar_date_picker.dart';
 import 'customer_model.dart';
 import 'customer_repository.dart';
 import '../storage/storage_model.dart';
@@ -91,6 +88,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     if (!mounted) return;
     final name = widget.customerName;
     final cache = context.read<DataCache>();
+    final revision = cache.revision;
+    bool current() => mounted && cache.revision == revision;
     final cached = cache.get<_CustomerDetailCache>(_cacheKey(name));
     if (cached != null) {
       setState(() {
@@ -126,11 +125,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         customerRepo.getByName(name),
         storageRepo.getByCustomer(name),
         smallItemRepo.getAll(),
-        customerRepo.getTotalDeposit(name),
-        customerRepo.getEarliestStorageDate(name),
-        customerRepo.getTotalRemainingConsumption(name),
-        customerRepo.getStorageCodes(name),
       ]));
+      if (!current()) return;
       final customer = results[0] as CustomerModel?;
       if (customer == null) {
         if (mounted) context.pop();
@@ -138,21 +134,25 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       }
       final storages = results[1] as List<StorageRecordModel>;
       final options = results[2] as List;
-      final totalDeposit = results[3] as double;
-      final earliest = results[4] as DateTime?;
-      final totalRemaining = results[5] as int;
-      final codes = results[6] as List<String>;
       final opts = options as List<StorageSmallItemOption>;
       final nameMap = {for (var o in opts) o.id: o.name};
+      final allConsumptions = await consumptionRepo.getByStorageIds(storages.map((s) => s.id));
+      if (!current()) return;
+      final grouped = <int, List<ConsumptionRecordModel>>{for (final s in storages) s.id: []};
+      for (final consumption in allConsumptions) {
+        grouped[consumption.storageRecordId]?.add(consumption);
+      }
+      final totalDeposit = storages.fold<double>(0, (total, s) => total + s.amount);
+      final totalRemaining = storages.fold<int>(0, (total, s) => total + s.totalCount) - allConsumptions.length;
+      DateTime? earliest;
+      for (final storage in storages) {
+        if (earliest == null || storage.storageDate.isBefore(earliest)) earliest = storage.storageDate;
+      }
+      final codes = storages.map((s) => s.code).toList();
 
-      if (mounted) {
-        // 加载每条储值对应的消费记录，用于右侧列表
+      if (current()) {
         _consumptionsByStorage.clear();
-        for (final s in storages) {
-          final list = await consumptionRepo.getByStorage(s.id);
-          _consumptionsByStorage[s.id] = list;
-        }
-
+        _consumptionsByStorage.addAll(grouped);
         cache.set(
           _cacheKey(name),
           _CustomerDetailCache(
@@ -185,7 +185,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (current()) {
         setState(() {
           _error = toUserFriendlyError(e);
           _loading = false;
@@ -193,6 +193,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       }
     } finally {
       _loadInProgress = false;
+      if (mounted && cache.revision != revision) _load();
     }
   }
 
@@ -317,171 +318,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     }
   }
 
-  Future<void> _updateCustomer(CustomerModel updated) async {
-    final repo = context.read<CustomerRepository>();
-    await repo.update(widget.customerName, updated);
-    if (mounted) {
-      context.read<DataRefreshNotifier>().invalidateCustomerAndTree();
-      _load();
-    }
-  }
-
-  Future<void> _editPhone(CustomerModel c) async {
-    final controller = TextEditingController(text: c.phone ?? '');
-    final v = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑手机号'),
-        content: TextField(controller: controller, keyboardType: TextInputType.phone),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('确定')),
-        ],
-      ),
-    );
-    if (v != null && mounted) await _updateCustomer(c.copyWith(phone: v.isEmpty ? null : v));
-  }
-
-  Future<void> _editLunarBirthday(CustomerModel c) async {
-    final parsed = _parseLunarBirthday(c.lunarBirthday);
-    final result = await LunarDatePicker.show(
-      context,
-      initialYear: parsed?.year ?? DateTime.now().year,
-      initialMonth: parsed?.month ?? 1,
-      initialDay: parsed?.day ?? 1,
-    );
-    if (result != null && mounted) {
-      final solar = result.isLeap
-          ? LunarHelper.lunarToSolarWithLeap(result.year, result.month, result.day, isLeapMonth: true)
-          : LunarHelper.lunarToSolar(result.year, result.month, result.day);
-      await _updateCustomer(c.copyWith(
-        lunarBirthday: '${result.year}年${result.month}月${result.day}日',
-        solarBirthday: solar,
-        zodiac: solar != null ? LunarHelper.getZodiacFromSolar(solar) : c.zodiac,
-        age: solar != null ? LunarHelper.getAgeInYears(solar) : c.age,
-        lifeNumber: solar != null ? LunarHelper.getLifeNumber(solar) : c.lifeNumber,
-      ));
-    }
-  }
-
-  ({int year, int month, int day})? _parseLunarBirthday(String? s) {
-    if (s == null || s.isEmpty) return null;
-    final re = RegExp(r'(\d{1,4})年(?:闰)?(\d{1,2})月(\d{1,2})日');
-    final m = re.firstMatch(s);
-    if (m == null) return null;
-    final year = int.tryParse(m.group(1) ?? '');
-    final month = int.tryParse(m.group(2) ?? '');
-    final day = int.tryParse(m.group(3) ?? '');
-    if (year == null || month == null || day == null) return null;
-    return (year: year, month: month, day: day);
-  }
-
-  Future<void> _editSolarBirthday(CustomerModel c) async {
-    final d = await showDatePicker(
-      context: context,
-      initialDate: c.solarBirthday ?? DateTime.now(),
-      firstDate: DateTime(1900),
-      lastDate: DateTime.now(),
-      locale: const Locale('zh', 'CN'),
-    );
-    if (d != null && mounted) {
-      final lunar = LunarHelper.solarToLunar(d);
-      await _updateCustomer(c.copyWith(
-        solarBirthday: d,
-        lunarBirthday: lunar != null ? '${lunar.year}年${lunar.month}月${lunar.day}日' : c.lunarBirthday,
-        zodiac: LunarHelper.getZodiacFromSolar(d),
-        age: LunarHelper.getAgeInYears(d),
-        lifeNumber: LunarHelper.getLifeNumber(d),
-      ));
-    }
-  }
-
-  Future<void> _editZodiac(CustomerModel c) async {
-    final controller = TextEditingController(text: c.zodiac ?? '');
-    final v = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑属相'),
-        content: TextField(controller: controller),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('确定')),
-        ],
-      ),
-    );
-    if (v != null && mounted) await _updateCustomer(c.copyWith(zodiac: v.isEmpty ? null : v));
-  }
-
-  Future<void> _editAge(CustomerModel c) async {
-    final controller = TextEditingController(text: c.age?.toString() ?? '');
-    final v = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑年龄'),
-        content: TextField(controller: controller, keyboardType: TextInputType.number),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('确定')),
-        ],
-      ),
-    );
-    if (v != null && mounted) {
-      final age = int.tryParse(v);
-      await _updateCustomer(c.copyWith(age: age));
-    }
-  }
-
-  Future<void> _editAddress(CustomerModel c) async {
-    final controller = TextEditingController(text: c.address ?? '');
-    final v = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑住址'),
-        content: TextField(controller: controller, maxLines: 2),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('确定')),
-        ],
-      ),
-    );
-    if (v != null && mounted) await _updateCustomer(c.copyWith(address: v.isEmpty ? null : v));
-  }
-
-  Future<void> _editLifeNumber(CustomerModel c) async {
-    final controller = TextEditingController(text: c.lifeNumber?.toString() ?? '');
-    final v = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑生命密码'),
-        content: TextField(controller: controller, keyboardType: TextInputType.number),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('确定')),
-        ],
-      ),
-    );
-    if (v != null && mounted) {
-      final n = int.tryParse(v);
-      await _updateCustomer(c.copyWith(lifeNumber: n));
-    }
-  }
-
-  Future<void> _editSymptoms(CustomerModel c) async {
-    final controller = TextEditingController(text: c.symptoms ?? '');
-    final v = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑症状'),
-        content: TextField(controller: controller, maxLines: 3),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('确定')),
-        ],
-      ),
-    );
-    if (v != null && mounted) await _updateCustomer(c.copyWith(symptoms: v.isEmpty ? null : v));
-  }
-
   Future<void> _confirmDelete(BuildContext context) async {
     final c = _customer;
     if (c == null) return;
@@ -568,30 +404,21 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _InfoCard(
-                      title: '基本信息（点击可编辑）',
+                      title: '基本信息',
                       children: [
-                        _EditableInfoRow(
-                          label: '手机号',
-                          value: c.phone ?? '-',
-                          onTap: () => _editPhone(c),
-                        ),
-                        _EditableInfoRow(
-                          label: '农历生日',
-                          value: c.lunarBirthday ?? '-',
-                          onTap: () => _editLunarBirthday(c),
-                        ),
-                        _EditableInfoRow(
+                        _InfoRow(label: '手机号', value: c.phone ?? '-'),
+                        _InfoRow(label: '农历生日', value: c.lunarBirthday ?? '-'),
+                        _InfoRow(
                           label: '公历生日',
                           value: c.solarBirthday != null
                               ? '${c.solarBirthday!.year}-${c.solarBirthday!.month.toString().padLeft(2, '0')}-${c.solarBirthday!.day.toString().padLeft(2, '0')}'
                               : '-',
-                          onTap: () => _editSolarBirthday(c),
                         ),
-                        _EditableInfoRow(label: '属相', value: c.zodiac ?? '-', onTap: () => _editZodiac(c)),
-                        _EditableInfoRow(label: '年龄', value: c.age?.toString() ?? '-', onTap: () => _editAge(c)),
-                        _EditableInfoRow(label: '住址', value: c.address ?? '-', onTap: () => _editAddress(c)),
-                        _EditableInfoRow(label: '生命密码', value: c.lifeNumber?.toString() ?? '-', onTap: () => _editLifeNumber(c)),
-                        _EditableInfoRow(label: '症状', value: c.symptoms ?? '-', onTap: () => _editSymptoms(c)),
+                        _InfoRow(label: '属相', value: c.zodiac ?? '-'),
+                        _InfoRow(label: '年龄', value: c.age?.toString() ?? '-'),
+                        _InfoRow(label: '住址', value: c.address ?? '-'),
+                        _InfoRow(label: '生命密码', value: c.lifeNumber?.toString() ?? '-'),
+                        _InfoRow(label: '症状', value: c.symptoms ?? '-'),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -638,9 +465,39 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     const SizedBox(height: 24),
                     Text('储值与消费', style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 8),
-                    SizedBox(
-                      height: 420,
-                      child: Row(
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        if (constraints.maxWidth < 720) {
+                          if (_storages.isEmpty) {
+                            return const Card(
+                              child: Padding(
+                                padding: EdgeInsets.all(24),
+                                child: Center(child: Text('暂无储值记录')),
+                              ),
+                            );
+                          }
+                          return Column(
+                            children: _storages.map((s) => _StorageCard(
+                              storage: s,
+                              smallItemNames: _smallItemNames,
+                              onTap: () async {
+                                await context.push('/storage/${s.id}');
+                                if (mounted) _load();
+                              },
+                              onCopy: () async {
+                                await context.push(
+                                  '/storage/new',
+                                  extra: {'customer': c.name, 'copy': s.id},
+                                );
+                                if (mounted) _load();
+                              },
+                              onDelete: () => _deleteStorage(s),
+                            )).toList(),
+                          );
+                        }
+                        return SizedBox(
+                          height: 420,
+                          child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           // 左侧：储值列表（仅标题，无三点菜单，点击右列顶部展示详情与操作）
@@ -730,7 +587,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                             ),
                           ),
                         ],
-                      ),
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -997,41 +856,6 @@ class _InfoRow extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _EditableInfoRow extends StatelessWidget {
-  final String label;
-  final String value;
-  final VoidCallback onTap;
-
-  const _EditableInfoRow({required this.label, required this.value, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 120,
-              child: Text(label, style: TextStyle(color: Colors.grey[600])),
-            ),
-            Expanded(
-              child: Text(
-                value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            Icon(Icons.edit, size: 16, color: Colors.grey[500]),
-          ],
-        ),
       ),
     );
   }
