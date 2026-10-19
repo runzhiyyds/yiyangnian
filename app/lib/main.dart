@@ -36,7 +36,7 @@ void main() async {
       await Supabase.initialize(
         url: Config.supabaseUrl,
         anonKey: Config.supabaseAnonKey,
-        httpClient: SupabaseHttpClient(),
+        httpClient: SupabaseHttpClient(readTimeout: const Duration(seconds: 16)),
         authOptions: authOptions,
       );
     }

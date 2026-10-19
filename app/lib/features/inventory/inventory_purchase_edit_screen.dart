@@ -289,7 +289,7 @@ class _InventoryPurchaseEditScreenState
     if (name == null || name.trim().isEmpty || !mounted) return;
     try {
       final repo = context.read<StorageBigItemRepository>();
-      final opt = await retryOnFailure(() => repo.getOrCreate(name));
+      final opt = await repo.getOrCreate(name);
       if (!mounted) return;
       final cache = context.read<DataCache>();
       setState(() {
@@ -351,9 +351,7 @@ class _InventoryPurchaseEditScreenState
     try {
       final repo = context.read<StorageSmallItemRepository>();
       final bigId = _getBigItemId();
-      final opt = await retryOnFailure(
-        () => repo.getOrCreate(name, storageBigItemId: bigId),
-      );
+      final opt = await repo.getOrCreate(name, storageBigItemId: bigId);
       if (!mounted) return null;
       final cache = context.read<DataCache>();
       setState(() {

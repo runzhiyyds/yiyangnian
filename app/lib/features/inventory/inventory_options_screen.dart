@@ -263,16 +263,22 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
       });
       if (!_preloadScheduled && accountId != null) {
         _preloadScheduled = true;
-        _preloadTimer = Timer(const Duration(seconds: 1), () {
+        _preloadTimer = Timer(const Duration(seconds: 3), () {
           if (!isCurrentAccount()) return;
           final tree = context.read<TreeDataProvider?>();
           if (tree == null) return;
-          unawaited(Future.wait([
-            tree.load(context),
-            preloadStoreAnalyticsData(context),
-          ]).then<void>((_) {}).catchError((Object e) {
-            debugPrint('Background preload skipped: ${e.runtimeType}');
-          }));
+          // Inventory is the busiest first screen. Warm secondary pages in
+          // sequence so they do not add two more request bursts at once.
+          unawaited(() async {
+            try {
+              await tree.load(context);
+              if (mounted && isCurrentAccount()) {
+                await preloadStoreAnalyticsData(context);
+              }
+            } catch (e) {
+              debugPrint('Background preload skipped: ${e.runtimeType}');
+            }
+          }());
         });
       }
     } catch (e) {
@@ -343,9 +349,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
                 )
                 ?.id
           : null;
-      await retryOnFailure(
-        () => repo.getOrCreate(name, storageBigItemId: bigId),
-      );
+      await repo.getOrCreate(name, storageBigItemId: bigId);
       if (!mounted) return;
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
       await _load(forceRefresh: true);
@@ -433,7 +437,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
     if (newBigId == currentBigId) return;
     try {
       final repo = context.read<StorageSmallItemRepository>();
-      await retryOnFailure(() => repo.updateBigItem(opt.id, newBigId));
+      await repo.updateBigItem(opt.id, newBigId);
       if (!mounted) return;
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
       await _load(forceRefresh: true);
@@ -482,7 +486,7 @@ class _InventoryOptionsScreenState extends State<InventoryOptionsScreen> {
     if (name == null || name.isEmpty || !mounted) return;
     try {
       final repo = context.read<StorageSmallItemRepository>();
-      await retryOnFailure(() => repo.update(opt.id, name));
+      await repo.update(opt.id, name);
       if (!mounted) return;
       context.read<DataRefreshNotifier>().invalidateStorageOptions();
       await _load(forceRefresh: true);
