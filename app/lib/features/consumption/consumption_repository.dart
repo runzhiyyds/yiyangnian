@@ -17,6 +17,9 @@ abstract class ConsumptionRepositoryBase {
   Future<List<ConsumptionRecordModel>> getByStorageIds(
     Iterable<int> storageRecordIds,
   );
+  Future<Map<int, int>> getConsumedCountsByStorageIds(
+    Iterable<int> storageRecordIds,
+  );
   Future<ConsumptionRecordModel?> getById(int id);
   Future<int> getConsumedCount(int storageRecordId);
   Future<ConsumptionRecordModel> create(ConsumptionRecordModel record);
@@ -115,6 +118,37 @@ class ConsumptionRepository implements ConsumptionRepositoryBase {
       }
     }
     return all;
+  }
+
+  /// 储值列表只需要每张单的已消费次数，避免逐单请求和下载完整消费记录。
+  @override
+  Future<Map<int, int>> getConsumedCountsByStorageIds(
+    Iterable<int> storageRecordIds,
+  ) async {
+    final ids = storageRecordIds.toSet().toList();
+    if (ids.isEmpty) return {};
+    final counts = <int, int>{};
+    for (var i = 0; i < ids.length; i += _inChunkSize) {
+      final end = (i + _inChunkSize > ids.length)
+          ? ids.length
+          : i + _inChunkSize;
+      final chunk = ids.sublist(i, end);
+      const pageSize = 500;
+      for (var offset = 0; ; offset += pageSize) {
+        final rows = await _client
+            .from('consumption_records')
+            .select('storage_record_id')
+            .inFilter('storage_record_id', chunk)
+            .order('id')
+            .range(offset, offset + pageSize - 1);
+        for (final row in rows as List) {
+          final id = (row as Map)['storage_record_id'] as int;
+          counts.update(id, (count) => count + 1, ifAbsent: () => 1);
+        }
+        if (rows.length < pageSize) break;
+      }
+    }
+    return counts;
   }
 
   Future<ConsumptionRecordModel?> getById(int id) async {
