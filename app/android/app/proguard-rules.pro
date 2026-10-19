@@ -14,3 +14,8 @@
 
 # 保留 Dart/Flutter 与 JNI
 -keep class io.flutter.** { *; }
+
+# Flutter 引擎包含 Play Store 动态模块的可选入口；当前 APK 不使用动态模块。
+-dontwarn com.google.android.play.core.splitcompat.SplitCompatApplication
+-dontwarn com.google.android.play.core.splitinstall.**
+-dontwarn com.google.android.play.core.tasks.**

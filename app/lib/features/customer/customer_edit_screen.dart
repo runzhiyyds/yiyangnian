@@ -70,10 +70,12 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
   Future<void> _loadCustomer() async {
     final name = widget.customerName!;
     final cache = context.read<DataCache>();
+    final revision = cache.revision;
     var c = cache.get<CustomerModel>(_cacheKeyCustomer(name));
     if (c == null) {
       final repo = context.read<CustomerRepository>();
       c = await repo.getByName(name);
+      if (!mounted || cache.revision != revision) return;
       if (c != null) cache.set(_cacheKeyCustomer(name), c);
     }
     if (c != null && mounted) {
@@ -93,10 +95,12 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
   Future<void> _loadTemplate() async {
     final name = widget.templateName!;
     final cache = context.read<DataCache>();
+    final revision = cache.revision;
     var storages = cache.get<List<StorageRecordModel>>(_cacheKeyTemplateStorages(name));
     if (storages == null) {
       final storageRepo = context.read<StorageRepository>();
       storages = await storageRepo.getByCustomer(name);
+      if (!mounted || cache.revision != revision) return;
       cache.set(_cacheKeyTemplateStorages(name), storages);
     }
     if (mounted) {

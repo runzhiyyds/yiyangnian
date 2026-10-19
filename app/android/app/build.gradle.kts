@@ -34,9 +34,9 @@ android {
 
     buildTypes {
         release {
-            // 先关闭 minify，排查 Release 下 Failed host lookup 而 Debug 正常的问题
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // Release 显式声明 INTERNET 权限后启用 R8/资源裁剪，避免发布 Debug 巨型包。
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("debug")
         }
