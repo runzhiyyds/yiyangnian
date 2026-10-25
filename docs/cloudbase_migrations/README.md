@@ -10,6 +10,22 @@
 4. 使用临时账号通过 CloudBase HTTP API 调用 `initialize_current_account`，验证默认大项、REST 权限和 RLS。
 5. 验收通过后再生成并执行历史数据导入脚本。不要直接向新库导入旧 Supabase 的 `owner_id UUID`。
 
+## 全量 CSV 导入
+
+生产 CSV 和生成的全量 SQL 均被 `.gitignore` 排除，严禁提交到 GitHub。使用：
+
+```bash
+python3 tools/generate_cloudbase_import.py \
+  --source-dir docs/颐养年备份 \
+  --output docs/cloudbase_migrations/generated/004_import_full_snapshot.sql \
+  --old-production-owner '<旧正式账号 UUID>' \
+  --old-demo-owner '<旧体验账号 UUID>' \
+  --new-production-owner '<CloudBase 正式账号 sub>' \
+  --new-demo-owner '<CloudBase 体验账号 sub>'
+```
+
+生成器不接收密码或 Token。生成结果包含真实客户数据，只能保存在本机并通过 CloudBase SQL 编辑器执行。脚本会检查目标业务表为空、两个目标账号存在、默认大项完整；所有导入和校验处于同一事务，失败会整体回滚。
+
 设计边界：
 
 - CloudBase 的 `auth.uid()` 返回 JWT `sub`，类型是 `text`。
