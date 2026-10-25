@@ -674,7 +674,19 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   inventory_consumption_records,
   push_devices
 TO authenticated;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+GRANT USAGE, SELECT ON SEQUENCE
+  storage_code_seq,
+  consumption_code_seq,
+  inventory_purchase_code_seq,
+  storage_big_item_options_id_seq,
+  storage_small_item_options_id_seq,
+  storage_records_id_seq,
+  consumption_records_id_seq,
+  inventory_purchase_records_id_seq,
+  inventory_supplementary_in_records_id_seq,
+  inventory_consumption_records_id_seq,
+  push_devices_id_seq
+TO authenticated;
 
 REVOKE ALL ON FUNCTION generate_storage_code() FROM PUBLIC;
 REVOKE ALL ON FUNCTION generate_consumption_code() FROM PUBLIC;
