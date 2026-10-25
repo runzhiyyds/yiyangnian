@@ -50,7 +50,7 @@ class AuthService extends ChangeNotifier {
 
   Future<void> testConnection() async {
     final client = _client;
-    if (client == null) throw StateError('Supabase 未配置');
+    if (client == null) throw StateError('数据服务未配置');
     await client.from('customers').select('name').limit(1);
   }
 
@@ -79,7 +79,7 @@ class AuthService extends ChangeNotifier {
     _setUser(data.session?.user);
   }
 
-  /// Supabase.initialize 已完成本地会话恢复；冷启动时直接复用有效会话。
+  /// 后端客户端初始化后恢复本地会话；冷启动时直接复用有效会话。
   Future<void> ensureInitialized() async {
     final client = _client;
     if (_initialized || client == null) {
@@ -94,7 +94,7 @@ class AuthService extends ChangeNotifier {
     if (_logout != null) await _logout;
     final client = _client;
     if (client == null) {
-      throw Exception('Supabase 未配置');
+      throw Exception('数据服务未配置');
     }
     await client.auth.signInWithPassword(email: email, password: password);
     // 与 onAuthStateChange 同步，避免登录成功后下一帧前 isLoggedIn 仍为 false，GoRouter 把用户打回登录页

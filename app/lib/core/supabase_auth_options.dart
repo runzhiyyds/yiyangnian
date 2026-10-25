@@ -3,19 +3,23 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 const gatewayHost = 'yiyangnian-api.pet-food-advisor.asia';
 const originalSessionKey = 'sb-jhntjagskjklbrsgturh-auth-token';
+const cloudBaseSessionKey = 'tcb-yiyangnian-shanghai-auth-token';
 
 /// This gateway is fixed to the original project; retain its existing session.
 /// Other hosts keep the SDK default instead of inheriting another project's key.
-FlutterAuthClientOptions supabaseAuthOptions(String url) =>
-    FlutterAuthClientOptions(
-      localStorage: Uri.parse(url).host == gatewayHost
-          ? QueuedSessionStorage(
-              SharedPreferencesLocalStorage(
-                persistSessionKey: originalSessionKey,
-              ),
-            )
-          : null,
-    );
+FlutterAuthClientOptions supabaseAuthOptions(
+  String url,
+) => FlutterAuthClientOptions(
+  localStorage: Uri.parse(url).host == gatewayHost
+      ? QueuedSessionStorage(
+          SharedPreferencesLocalStorage(persistSessionKey: originalSessionKey),
+        )
+      : Uri.parse(url).host.endsWith('.api.tcloudbasegateway.com')
+      ? QueuedSessionStorage(
+          SharedPreferencesLocalStorage(persistSessionKey: cloudBaseSessionKey),
+        )
+      : null,
+);
 
 /// SDK auth events persist asynchronously. Queue them with the explicit local
 /// logout so a delayed removal cannot erase the next account's saved session.

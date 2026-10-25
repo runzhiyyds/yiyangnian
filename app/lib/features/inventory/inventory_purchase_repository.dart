@@ -89,11 +89,16 @@ class InventoryPurchaseRepository {
       }
       final data = record.toJson();
       data['code'] = code;
-      final res = await _client
-          .from('inventory_purchase_records')
-          .insert(data)
-          .select()
-          .single();
+      final table = _client.from('inventory_purchase_records');
+      final res =
+          await (record.clientRequestId == null
+                  ? table.insert(data)
+                  : table.upsert(
+                      data,
+                      onConflict: 'owner_id,client_request_id',
+                    ))
+              .select()
+              .single();
       return InventoryPurchaseRecordModel.fromJson(
         Map<String, dynamic>.from(res as Map),
       );

@@ -6,6 +6,10 @@ import 'package:flutter/foundation.dart';
 import 'env_generated.dart';
 
 class Config {
+  static const String cloudBaseEnvId = kCloudBaseEnvId;
+  static const String backendUrl =
+      'https://$cloudBaseEnvId.api.tcloudbasegateway.com';
+  static const String backendKey = 'cloudbase-public';
   static const String supabaseUrl = kSupabaseUrl;
   static const String supabaseAnonKey = kSupabaseAnonKey;
 
@@ -14,12 +18,15 @@ class Config {
 
   /// 蒲公英 App Key（应用管理 → 安装设置），用于启动页版本检测
   static const String pgyerAppKey = kPgyerAppKey;
+
   /// 蒲公英 API Key（账户设置 → API 信息），用于调用 app/check
   static const String pgyerApiKey = kPgyerApiKey;
 
   static bool get isSupabaseConfigured =>
       !supabaseUrl.contains('REPLACE_ME') &&
       !supabaseAnonKey.contains('REPLACE_ME');
+
+  static bool get isBackendConfigured => cloudBaseEnvId.isNotEmpty;
 
   static bool get hasUpdateCheck => updateCheckUrl.isNotEmpty;
 
@@ -29,15 +36,15 @@ class Config {
 
   /// 用于设置页显示，便于对比 Debug/Release 是否同一配置（仅显示主机前缀）
   static String get supabaseHostDisplay {
-    if (!isSupabaseConfigured) return '未配置';
+    if (!isBackendConfigured) return '未配置';
     try {
-      final uri = Uri.parse(supabaseUrl);
+      final uri = Uri.parse(backendUrl);
       final host = uri.host;
       if (host.length <= 12) return host;
       return '${host.substring(0, 8)}***${host.substring(host.length - 4)}';
     } catch (e) {
       debugPrint('config: _maskHost failed: $e');
-      return supabaseUrl;
+      return backendUrl;
     }
   }
 }

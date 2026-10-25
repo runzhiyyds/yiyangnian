@@ -32,7 +32,7 @@ class AppRouter {
     refreshListenable: auth,
     redirect: (context, state) {
       final loc = state.matchedLocation;
-      if (!Config.isSupabaseConfigured) {
+      if (!Config.isBackendConfigured) {
         return loc == '/splash' ? null : '/splash';
       }
       if (loc == '/splash') return null;

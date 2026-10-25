@@ -8,6 +8,7 @@ import '../../core/data_refresh.dart';
 import '../../core/demo_mode.dart';
 import '../../core/error_message.dart';
 import '../../core/retry_helper.dart';
+import '../../core/write_request_id.dart';
 import '../auth/auth_service.dart';
 import '../storage_options/storage_big_item_repository.dart';
 import '../storage_options/storage_small_item_repository.dart';
@@ -56,6 +57,7 @@ class _InventoryPurchaseEditScreenState
   late bool _isEditing;
   String? _error;
   InventoryPurchaseRecordModel? _loadedRecord;
+  final String _createRequestId = newWriteRequestId();
 
   String _cacheKeyBig(BuildContext context) =>
       DemoMode.inventoryBigOptionsCacheKey(
@@ -712,6 +714,7 @@ class _InventoryPurchaseEditScreenState
   }
 
   Future<void> _save() async {
+    if (_loading) return;
     if (_hasLineDataMismatch) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('该历史记录的商品数据不完整，为避免丢失内容，暂不允许保存')),
@@ -783,6 +786,7 @@ class _InventoryPurchaseEditScreenState
         remark: _remarkController.text.trim().isEmpty
             ? null
             : _remarkController.text.trim(),
+        clientRequestId: _loadedRecord?.clientRequestId ?? _createRequestId,
       );
 
       final saved = widget.purchaseId != null

@@ -191,4 +191,245 @@ void main() {
     expect(calls, 2);
     client.close();
   });
+
+  group('CloudBase compatibility', () {
+    final cloudBase = Uri.parse(
+      'https://yiyangnian-shanghai-d0b1453112fa.api.tcloudbasegateway.com',
+    );
+
+    test('maps app email to the existing CloudBase username', () {
+      expect(
+        cloudBaseUsernameForEmail(' 18613544351@163.COM '),
+        'u_18613544351_163_com',
+      );
+      expect(
+        cloudBaseUsernameForEmail('User@example.com'),
+        'u_user_example_com',
+      );
+    });
+
+    test('rewrites PostgREST path and removes Supabase apikey', () async {
+      late http.BaseRequest forwarded;
+      final client = SupabaseHttpClient(
+        inner: _Transport((request) async {
+          forwarded = request;
+          return http.StreamedResponse(Stream.value(utf8.encode('[]')), 200);
+        }),
+      );
+
+      final response = await client.get(
+        cloudBase.replace(path: '/rest/v1/customers', query: 'select=name'),
+        headers: {
+          'apikey': 'legacy-anon-key',
+          'authorization': 'Bearer access-token',
+        },
+      );
+
+      expect(forwarded.url.path, '/v1/rdb/rest/customers');
+      expect(forwarded.url.query, 'select=name');
+      expect(forwarded.headers, isNot(contains('apikey')));
+      expect(forwarded.headers['authorization'], 'Bearer access-token');
+      expect(response.body, '[]');
+      client.close();
+    });
+
+    test(
+      'adapts password grant and enriches token with a Supabase user',
+      () async {
+        var calls = 0;
+        final client = SupabaseHttpClient(
+          inner: _Transport((request) async {
+            calls++;
+            if (calls == 1) {
+              expect(request.url.path, '/auth/v1/token');
+              expect(request.url.hasQuery, isFalse);
+              expect(request.headers, isNot(contains('apikey')));
+              expect(request.headers, isNot(contains('authorization')));
+              final body = jsonDecode(await request.finalize().bytesToString());
+              expect(body, {
+                'password': 'test-password',
+                'username': 'u_user_example_com',
+                'grant_type': 'password',
+              });
+              return http.StreamedResponse(
+                Stream.value(
+                  utf8.encode(
+                    jsonEncode({
+                      'token_type': 'Bearer',
+                      'access_token': 'header.payload.signature',
+                      'refresh_token': 'refresh-token',
+                      'expires_in': 7200,
+                      'sub': '2114251442994114561',
+                    }),
+                  ),
+                ),
+                200,
+                request: request,
+              );
+            }
+            expect(request.method, 'GET');
+            expect(request.url.path, '/auth/v1/user/me');
+            expect(
+              request.headers['authorization'],
+              'Bearer header.payload.signature',
+            );
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  jsonEncode({
+                    'sub': '2114251442994114561',
+                    'email': 'User@example.com',
+                    'username': 'u_user_example_com',
+                    'created_at': '2026-10-25T00:00:00Z',
+                    'email_verified': true,
+                  }),
+                ),
+              ),
+              200,
+              request: request,
+            );
+          }),
+        );
+
+        final response = await client.post(
+          cloudBase.replace(
+            path: '/auth/v1/token',
+            queryParameters: {'grant_type': 'password'},
+          ),
+          headers: {
+            'apikey': 'cloudbase-public',
+            'authorization': 'Bearer cloudbase-public',
+            'content-type': 'application/json',
+          },
+          body: jsonEncode({
+            'email': 'User@example.com',
+            'password': 'test-password',
+            'gotrue_meta_security': {'captcha_token': null},
+          }),
+        );
+        final payload = jsonDecode(response.body) as Map<String, dynamic>;
+        expect(payload['sub'], '2114251442994114561');
+        expect(payload['user']['id'], '2114251442994114561');
+        expect(payload['user']['email'], 'User@example.com');
+        expect(calls, 2);
+        client.close();
+      },
+    );
+
+    test('maps get user response to the direct GoTrue user shape', () async {
+      final client = SupabaseHttpClient(
+        inner: _Transport((request) async {
+          expect(request.url.path, '/auth/v1/user/me');
+          return http.StreamedResponse(
+            Stream.value(
+              utf8.encode(
+                jsonEncode({
+                  'sub': '2114251442994114561',
+                  'email': 'User@example.com',
+                }),
+              ),
+            ),
+            200,
+            request: request,
+          );
+        }),
+      );
+      final response = await client.get(
+        cloudBase.replace(path: '/auth/v1/user'),
+        headers: {'authorization': 'Bearer access-token'},
+      );
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      expect(payload['id'], '2114251442994114561');
+      expect(payload, isNot(contains('user')));
+      client.close();
+    });
+
+    test('adapts refresh grant without exposing legacy headers', () async {
+      var calls = 0;
+      final client = SupabaseHttpClient(
+        inner: _Transport((request) async {
+          calls++;
+          if (calls == 1) {
+            final body = jsonDecode(await request.finalize().bytesToString());
+            expect(request.url.path, '/auth/v1/token');
+            expect(request.url.hasQuery, isFalse);
+            expect(request.headers, isNot(contains('apikey')));
+            expect(request.headers, isNot(contains('authorization')));
+            expect(body, {
+              'refresh_token': 'old-refresh-token',
+              'grant_type': 'refresh_token',
+            });
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  jsonEncode({
+                    'token_type': 'Bearer',
+                    'access_token': 'new.header.token',
+                    'refresh_token': 'new-refresh-token',
+                    'expires_in': 7200,
+                    'sub': '2114251442994114561',
+                  }),
+                ),
+              ),
+              200,
+              request: request,
+            );
+          }
+          return http.StreamedResponse(
+            Stream.value(
+              utf8.encode(jsonEncode({'sub': '2114251442994114561'})),
+            ),
+            200,
+            request: request,
+          );
+        }),
+      );
+      final response = await client.post(
+        cloudBase.replace(
+          path: '/auth/v1/token',
+          queryParameters: {'grant_type': 'refresh_token'},
+        ),
+        headers: {
+          'apikey': 'cloudbase-public',
+          'authorization': 'Bearer expired-token',
+          'content-type': 'application/json',
+        },
+        body: jsonEncode({'refresh_token': 'old-refresh-token'}),
+      );
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      expect(payload['refresh_token'], 'new-refresh-token');
+      expect(payload['user']['id'], '2114251442994114561');
+      expect(calls, 2);
+      client.close();
+    });
+
+    test(
+      'preserves REST write body and never replays a failed write',
+      () async {
+        var calls = 0;
+        final client = SupabaseHttpClient(
+          inner: _Transport((request) async {
+            calls++;
+            expect(request.url.path, '/v1/rdb/rest/customers');
+            expect(await request.finalize().bytesToString(), '{"name":"test"}');
+            throw http.ClientException('response lost');
+          }),
+        );
+        await expectLater(
+          client.post(
+            cloudBase.replace(path: '/rest/v1/customers'),
+            headers: {
+              'apikey': 'cloudbase-public',
+              'authorization': 'Bearer access-token',
+              'content-type': 'application/json',
+            },
+            body: '{"name":"test"}',
+          ),
+          throwsA(isA<http.ClientException>()),
+        );
+        expect(calls, 1);
+        client.close();
+      },
+    );
+  });
 }

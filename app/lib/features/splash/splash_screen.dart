@@ -31,7 +31,7 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _init() async {
-    if (!Config.isSupabaseConfigured) {
+    if (!Config.isBackendConfigured) {
       if (mounted) {
         setState(() => _notConfigured = true);
         _showNotConfigured();
@@ -114,7 +114,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   child: Text(
-                    '未配置 Supabase\n请在 app/env.json 配置后执行 ./scripts/generate_env_dart.sh 再重新运行',
+                    '未配置数据服务\n请检查 CloudBase 环境配置后重新运行',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.red[700], fontSize: 14),
                   ),

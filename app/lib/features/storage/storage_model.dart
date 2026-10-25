@@ -9,6 +9,7 @@ class StorageRecordModel {
   final DateTime storageDate;
   final String? remark;
   final DateTime? createdAt;
+  final String? clientRequestId;
 
   StorageRecordModel({
     required this.id,
@@ -21,6 +22,7 @@ class StorageRecordModel {
     required this.storageDate,
     this.remark,
     this.createdAt,
+    this.clientRequestId,
   });
 
   factory StorageRecordModel.fromJson(Map<String, dynamic> json) {
@@ -35,7 +37,10 @@ class StorageRecordModel {
     if (json['storage_small_item_ids'] != null) {
       final list = json['storage_small_item_ids'] as List<dynamic>?;
       if (list != null) {
-        smallIds = list.map((e) => (e is int) ? e : int.tryParse(e.toString()) ?? 0).where((e) => e > 0).toList();
+        smallIds = list
+            .map((e) => (e is int) ? e : int.tryParse(e.toString()) ?? 0)
+            .where((e) => e > 0)
+            .toList();
       }
     }
     DateTime storageDate = DateTime.now();
@@ -58,6 +63,7 @@ class StorageRecordModel {
       storageDate: storageDate,
       remark: remark != null && remark.isNotEmpty ? remark : null,
       createdAt: createdAt,
+      clientRequestId: json['client_request_id'] as String?,
     );
   }
 
@@ -72,6 +78,7 @@ class StorageRecordModel {
       'total_count': totalCount,
       'storage_date': storageDate.toIso8601String().split('T').first,
       if (r != null && r.isNotEmpty) 'remark': r,
+      if (clientRequestId != null) 'client_request_id': clientRequestId,
     };
   }
 }

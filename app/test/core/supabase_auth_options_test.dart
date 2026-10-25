@@ -48,6 +48,22 @@ void main() {
     },
   );
 
+  test('CloudBase uses a separate persisted session namespace', () async {
+    SharedPreferences.setMockInitialValues({
+      originalSessionKey: 'old-supabase-session',
+      cloudBaseSessionKey: 'cloudbase-session',
+    });
+    final storage = supabaseAuthOptions(
+      'https://yiyangnian-shanghai-d0b1453112fa.api.tcloudbasegateway.com',
+    ).localStorage!;
+    await storage.initialize();
+    expect(await storage.accessToken(), 'cloudbase-session');
+    await storage.persistSession('refreshed-cloudbase-session');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(cloudBaseSessionKey), 'refreshed-cloudbase-session');
+    expect(prefs.getString(originalSessionKey), 'old-supabase-session');
+  });
+
   test(
     'delayed SDK removal is serialized before the new persisted login',
     () async {

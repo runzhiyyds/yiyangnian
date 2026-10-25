@@ -176,11 +176,16 @@ class ConsumptionRepository implements ConsumptionRepositoryBase {
       final code = await generateConsumptionCode();
       final data = record.toJson();
       data['code'] = code;
-      final res = await _client
-          .from('consumption_records')
-          .insert(data)
-          .select()
-          .single();
+      final table = _client.from('consumption_records');
+      final res =
+          await (record.clientRequestId == null
+                  ? table.insert(data)
+                  : table.upsert(
+                      data,
+                      onConflict: 'owner_id,client_request_id',
+                    ))
+              .select()
+              .single();
       return ConsumptionRecordModel.fromJson(
         Map<String, dynamic>.from(res as Map),
       );

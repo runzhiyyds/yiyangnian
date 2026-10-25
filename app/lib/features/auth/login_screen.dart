@@ -42,11 +42,10 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     try {
       debugPrint('[颐养年] 测试服务连接...');
-      await context.read<AuthService>().testConnection()
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: () => throw Exception('连接超时'),
-          );
+      await context.read<AuthService>().testConnection().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw Exception('连接超时'),
+      );
       if (mounted) {
         setState(() {
           _error = '网络连接正常，可以登录';
@@ -73,9 +72,10 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     debugPrint('[颐养年] 开始登录...');
     try {
-      await context
-          .read<AuthService>()
-          .signIn(_emailController.text.trim(), _passwordController.text);
+      await context.read<AuthService>().signIn(
+        _emailController.text.trim(),
+        _passwordController.text,
+      );
       debugPrint('[颐养年] 登录成功');
       if (!mounted) return;
       context.read<DataRefreshNotifier>().notifyDataChanged();
@@ -95,7 +95,8 @@ class _LoginScreenState extends State<LoginScreen> {
           msg = '账号暂未启用，请联系管理员';
         } else if (e is TimeoutException) {
           msg = '登录超时，请检查网络后重试';
-        } else if (msg.contains('SocketException') || msg.contains('ClientException') ||
+        } else if (msg.contains('SocketException') ||
+            msg.contains('ClientException') ||
             msg.contains('Failed host lookup')) {
           msg = toUserFriendlyError(e);
         } else if (msg.contains('Rate limit')) {
@@ -125,7 +126,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (!Config.isSupabaseConfigured) {
+    if (!Config.isBackendConfigured) {
       return Scaffold(
         appBar: AppBar(title: const Text('颐养年店铺管理')),
         body: Center(
@@ -141,7 +142,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  '未配置 Supabase',
+                  '未配置数据服务',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),

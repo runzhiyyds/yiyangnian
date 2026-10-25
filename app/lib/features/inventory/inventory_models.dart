@@ -13,6 +13,7 @@ class InventoryPurchaseRecordModel {
   final bool occurredAtEstimated;
   final DateTime? voidedAt;
   final String? voidReason;
+  final String? clientRequestId;
 
   bool get isVoided => voidedAt != null;
 
@@ -37,6 +38,7 @@ class InventoryPurchaseRecordModel {
     this.occurredAtEstimated = false,
     this.voidedAt,
     this.voidReason,
+    this.clientRequestId,
   });
 
   factory InventoryPurchaseRecordModel.fromJson(Map<String, dynamic> json) {
@@ -89,6 +91,7 @@ class InventoryPurchaseRecordModel {
           json['occurred_at'] == null,
       voidedAt: _readDateTime(json['voided_at']),
       voidReason: json['void_reason'] as String?,
+      clientRequestId: json['client_request_id'] as String?,
     );
   }
 
@@ -106,6 +109,7 @@ class InventoryPurchaseRecordModel {
       ).toUtc().toIso8601String(),
       'occurred_at_is_estimated': occurredAtEstimated,
       if (remark != null && remark!.isNotEmpty) 'remark': remark,
+      if (clientRequestId != null) 'client_request_id': clientRequestId,
     };
   }
 }
@@ -125,6 +129,7 @@ class InventoryConsumptionRecordModel {
   final bool occurredAtEstimated;
   final DateTime? voidedAt;
   final String? voidReason;
+  final String? clientRequestId;
 
   bool get isVoided => voidedAt != null;
 
@@ -140,6 +145,7 @@ class InventoryConsumptionRecordModel {
     this.occurredAtEstimated = false,
     this.voidedAt,
     this.voidReason,
+    this.clientRequestId,
   });
 
   factory InventoryConsumptionRecordModel.fromJson(Map<String, dynamic> json) {
@@ -165,6 +171,7 @@ class InventoryConsumptionRecordModel {
           json['occurred_at'] == null,
       voidedAt: _readDateTime(json['voided_at']),
       voidReason: json['void_reason'] as String?,
+      clientRequestId: json['client_request_id'] as String?,
     );
   }
 
@@ -181,6 +188,7 @@ class InventoryConsumptionRecordModel {
       if (remark != null && remark!.isNotEmpty) 'remark': remark,
       if (sourceStorageRecordId != null)
         'source_storage_record_id': sourceStorageRecordId,
+      if (clientRequestId != null) 'client_request_id': clientRequestId,
     };
   }
 }
@@ -197,6 +205,7 @@ class InventorySuppInRecordModel {
   final bool occurredAtEstimated;
   final DateTime? voidedAt;
   final String? voidReason;
+  final String? clientRequestId;
 
   bool get isVoided => voidedAt != null;
 
@@ -211,6 +220,7 @@ class InventorySuppInRecordModel {
     this.occurredAtEstimated = false,
     this.voidedAt,
     this.voidReason,
+    this.clientRequestId,
   });
 
   factory InventorySuppInRecordModel.fromJson(Map<String, dynamic> json) {
@@ -235,6 +245,7 @@ class InventorySuppInRecordModel {
           json['occurred_at'] == null,
       voidedAt: _readDateTime(json['voided_at']),
       voidReason: json['void_reason'] as String?,
+      clientRequestId: json['client_request_id'] as String?,
     );
   }
 
@@ -249,6 +260,7 @@ class InventorySuppInRecordModel {
       ).toUtc().toIso8601String(),
       'occurred_at_is_estimated': occurredAtEstimated,
       if (remark != null && remark!.isNotEmpty) 'remark': remark,
+      if (clientRequestId != null) 'client_request_id': clientRequestId,
     };
   }
 }

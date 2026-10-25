@@ -7,6 +7,7 @@ import '../../core/data_refresh.dart';
 import '../../core/demo_mode.dart';
 import '../../core/error_message.dart';
 import '../../core/retry_helper.dart';
+import '../../core/write_request_id.dart';
 import '../auth/auth_service.dart';
 import '../storage_options/storage_small_item_repository.dart';
 import 'inventory_models.dart';
@@ -46,6 +47,7 @@ class _InventorySuppInEditScreenState extends State<InventorySuppInEditScreen> {
   String? _error;
   late bool _isEditing;
   InventorySuppInRecordModel? _loadedRecord;
+  final String _createRequestId = newWriteRequestId();
 
   String _cacheKey(BuildContext context) =>
       DemoMode.inventorySmallOptionsCacheKey(
@@ -108,6 +110,7 @@ class _InventorySuppInEditScreenState extends State<InventorySuppInEditScreen> {
   }
 
   Future<void> _save() async {
+    if (_loading) return;
     if (_selectedSmallItemId <= 0) {
       ScaffoldMessenger.of(
         context,
@@ -141,6 +144,7 @@ class _InventorySuppInEditScreenState extends State<InventorySuppInEditScreen> {
         remark: _remarkController.text.trim().isEmpty
             ? null
             : _remarkController.text.trim(),
+        clientRequestId: _loadedRecord?.clientRequestId ?? _createRequestId,
       );
 
       if (widget.recordId != null) {

@@ -3,13 +3,16 @@ class ConsumptionRecordModel {
   final String code;
   final DateTime consumptionDate;
   final int storageRecordId;
+
   /// 兼容字段：单个消费项目 ID（旧版本仅支持单选时使用）
   final int? consumptionProjectId;
+
   /// 多个消费项目 ID，新版本以此为主；若为空则回退到 [consumptionProjectId]
   final List<int> consumptionProjectIds;
   final String? signatureUrl;
   final String? remark;
   final DateTime? createdAt;
+  final String? clientRequestId;
 
   ConsumptionRecordModel({
     required this.id,
@@ -21,6 +24,7 @@ class ConsumptionRecordModel {
     this.signatureUrl,
     this.remark,
     this.createdAt,
+    this.clientRequestId,
   });
 
   factory ConsumptionRecordModel.fromJson(Map<String, dynamic> json) {
@@ -57,13 +61,13 @@ class ConsumptionRecordModel {
       signatureUrl: json['signature_url'] as String?,
       remark: json['remark'] as String?,
       createdAt: createdAt,
+      clientRequestId: json['client_request_id'] as String?,
     );
   }
 
   Map<String, dynamic> toJson() {
     final projIds = consumptionProjectIds;
-    final firstId =
-        projIds.isNotEmpty ? projIds.first : consumptionProjectId;
+    final firstId = projIds.isNotEmpty ? projIds.first : consumptionProjectId;
     return {
       'code': code,
       'consumption_date': consumptionDate.toIso8601String().split('T').first,
@@ -74,6 +78,7 @@ class ConsumptionRecordModel {
       'consumption_project_id': firstId,
       'signature_url': signatureUrl,
       'remark': remark,
+      if (clientRequestId != null) 'client_request_id': clientRequestId,
     };
   }
 }

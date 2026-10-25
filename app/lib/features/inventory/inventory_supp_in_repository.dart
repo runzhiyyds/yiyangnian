@@ -66,11 +66,17 @@ class InventorySuppInRepository {
     InventorySuppInRecordModel record,
   ) async {
     try {
-      final res = await _client
-          .from('inventory_supplementary_in_records')
-          .insert(record.toJson())
-          .select()
-          .single();
+      final table = _client.from('inventory_supplementary_in_records');
+      final data = record.toJson();
+      final res =
+          await (record.clientRequestId == null
+                  ? table.insert(data)
+                  : table.upsert(
+                      data,
+                      onConflict: 'owner_id,client_request_id',
+                    ))
+              .select()
+              .single();
       return InventorySuppInRecordModel.fromJson(
         Map<String, dynamic>.from(res as Map),
       );

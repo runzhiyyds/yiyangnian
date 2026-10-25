@@ -36,7 +36,7 @@ class PushNotificationService {
       _refreshAndUploadToken(client: client);
 
   static Future<void> releaseCurrentDevice({SupabaseClient? client}) async {
-    if (!Config.isSupabaseConfigured) return;
+    if (!Config.isBackendConfigured) return;
     final current = client ?? Supabase.instance.client;
     final jwt = current.auth.currentSession?.accessToken;
     final token = _deviceToken;
@@ -56,9 +56,9 @@ class PushNotificationService {
     final transport = SupabaseHttpClient(timeout: const Duration(seconds: 3));
     try {
       final response = await transport.post(
-        Uri.parse('${Config.supabaseUrl}/rest/v1/rpc/$function'),
+        Uri.parse('${Config.backendUrl}/rest/v1/rpc/$function'),
         headers: {
-          'apikey': Config.supabaseAnonKey,
+          'apikey': Config.backendKey,
           'authorization': 'Bearer $jwt',
           'content-type': 'application/json',
         },

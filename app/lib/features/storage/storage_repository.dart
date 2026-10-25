@@ -148,11 +148,16 @@ class StorageRepository implements StorageRepositoryBase {
       }
       final data = record.toJson();
       data['code'] = code;
-      final res = await _client
-          .from('storage_records')
-          .insert(data)
-          .select()
-          .single();
+      final table = _client.from('storage_records');
+      final res =
+          await (record.clientRequestId == null
+                  ? table.insert(data)
+                  : table.upsert(
+                      data,
+                      onConflict: 'owner_id,client_request_id',
+                    ))
+              .select()
+              .single();
       return StorageRecordModel.fromJson(Map<String, dynamic>.from(res as Map));
     } finally {
       _readCache?.clear();

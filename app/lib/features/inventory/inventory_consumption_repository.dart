@@ -67,11 +67,17 @@ class InventoryConsumptionRepository {
     InventoryConsumptionRecordModel record,
   ) async {
     try {
-      final res = await _client
-          .from('inventory_consumption_records')
-          .insert(record.toJson())
-          .select()
-          .single();
+      final table = _client.from('inventory_consumption_records');
+      final data = record.toJson();
+      final res =
+          await (record.clientRequestId == null
+                  ? table.insert(data)
+                  : table.upsert(
+                      data,
+                      onConflict: 'owner_id,client_request_id',
+                    ))
+              .select()
+              .single();
       return InventoryConsumptionRecordModel.fromJson(
         Map<String, dynamic>.from(res as Map),
       );
@@ -87,10 +93,15 @@ class InventoryConsumptionRepository {
     try {
       if (records.isEmpty) return [];
       final rows = records.map((r) => r.toJson()).toList();
-      final res = await _client
-          .from('inventory_consumption_records')
-          .insert(rows)
-          .select();
+      final hasRequestIds = records.every(
+        (record) => record.clientRequestId != null,
+      );
+      final table = _client.from('inventory_consumption_records');
+      final res =
+          await (hasRequestIds
+                  ? table.upsert(rows, onConflict: 'owner_id,client_request_id')
+                  : table.insert(rows))
+              .select();
       return (res as List)
           .map(
             (e) => InventoryConsumptionRecordModel.fromJson(
