@@ -3,5 +3,5 @@ class DemoCredentials {
   DemoCredentials._();
 
   static const email = 'user@example.com';
-  static const password = '123456';
+  static const password = 'User@example.com';
 }

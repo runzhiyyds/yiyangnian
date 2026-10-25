@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../core/data_cache.dart';
 import '../../core/data_refresh.dart';
 import '../../core/error_message.dart';
+import '../../core/write_request_id.dart';
 import '../../widgets/confirm_dialog.dart';
 import '../../widgets/loading_placeholder.dart';
 import 'consumption_model.dart';
@@ -15,11 +16,7 @@ import '../storage/storage_small_item_picker.dart';
 import '../storage_options/storage_small_item_repository.dart';
 
 class ConsumptionEditScreen extends StatefulWidget {
-  const ConsumptionEditScreen({
-    super.key,
-    this.consumptionId,
-    this.storageId,
-  });
+  const ConsumptionEditScreen({super.key, this.consumptionId, this.storageId});
 
   final int? consumptionId;
   final int? storageId;
@@ -38,6 +35,7 @@ class _ConsumptionEditScreenState extends State<ConsumptionEditScreen> {
   bool _loading = false;
   String? _error;
   String? _projectSelectionError;
+  final String _createRequestId = newWriteRequestId();
 
   @override
   void initState() {
@@ -70,7 +68,9 @@ class _ConsumptionEditScreenState extends State<ConsumptionEditScreen> {
       // 多项目优先，若为空则回退到单项目 ID
       final ids = c.consumptionProjectIds.isNotEmpty
           ? c.consumptionProjectIds
-          : (c.consumptionProjectId != null ? [c.consumptionProjectId!] : <int>[]);
+          : (c.consumptionProjectId != null
+                ? [c.consumptionProjectId!]
+                : <int>[]);
       _selectedProjectIds = ids;
       _remarkController.text = c.remark ?? '';
       final storageId = c.storageRecordId;
@@ -151,6 +151,7 @@ class _ConsumptionEditScreenState extends State<ConsumptionEditScreen> {
   }
 
   Future<void> _save() async {
+    if (_loading) return;
     if (_storage == null) return;
 
     final isEdit = widget.consumptionId != null;
@@ -178,8 +179,7 @@ class _ConsumptionEditScreenState extends State<ConsumptionEditScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('是否同步更新储值小项？'),
-          content: const Text(
-              '本次消费选择的小项与该笔储值当前配置的小项不同，如何处理？'),
+          content: const Text('本次消费选择的小项与该笔储值当前配置的小项不同，如何处理？'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, 'consumption_only'),
@@ -200,9 +200,11 @@ class _ConsumptionEditScreenState extends State<ConsumptionEditScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('请确认操作'),
-          content: Text(syncStorageSmallItems
-              ? '将更新该笔储值记录的小项为本次选择的小项，确认吗？'
-              : '仅将小项写入本次消费记录，不修改储值记录的小项，确认吗？'),
+          content: Text(
+            syncStorageSmallItems
+                ? '将更新该笔储值记录的小项为本次选择的小项，确认吗？'
+                : '仅将小项写入本次消费记录，不修改储值记录的小项，确认吗？',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -239,20 +241,25 @@ class _ConsumptionEditScreenState extends State<ConsumptionEditScreen> {
           remark: _remarkController.text.trim().isEmpty
               ? null
               : _remarkController.text.trim(),
+          clientRequestId:
+              _existingConsumption?.clientRequestId ?? _createRequestId,
         );
         await repo.update(record);
       } else {
-        created = await repo.create(ConsumptionRecordModel(
-          id: 0,
-          code: '',
-          consumptionDate: _consumptionDate,
-          storageRecordId: _storage!.id,
-          consumptionProjectId: projIds.isNotEmpty ? projIds.first : null,
-          consumptionProjectIds: projIds,
-          remark: _remarkController.text.trim().isEmpty
-              ? null
-              : _remarkController.text.trim(),
-        ));
+        created = await repo.create(
+          ConsumptionRecordModel(
+            id: 0,
+            code: '',
+            consumptionDate: _consumptionDate,
+            storageRecordId: _storage!.id,
+            consumptionProjectId: projIds.isNotEmpty ? projIds.first : null,
+            consumptionProjectIds: projIds,
+            remark: _remarkController.text.trim().isEmpty
+                ? null
+                : _remarkController.text.trim(),
+            clientRequestId: _createRequestId,
+          ),
+        );
       }
 
       // 根据选择，是否同步更新储值记录中的小项
@@ -264,7 +271,9 @@ class _ConsumptionEditScreenState extends State<ConsumptionEditScreen> {
           code: s.code,
           customerName: s.customerName,
           storageBigItems: s.storageBigItems,
-          storageSmallItemIds: projIds.isEmpty ? s.storageSmallItemIds : projIds,
+          storageSmallItemIds: projIds.isEmpty
+              ? s.storageSmallItemIds
+              : projIds,
           amount: s.amount,
           totalCount: s.totalCount,
           storageDate: s.storageDate,
@@ -356,11 +365,15 @@ class _ConsumptionEditScreenState extends State<ConsumptionEditScreen> {
                 ],
                 Card(
                   elevation: 0,
-                  color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.35),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.primaryContainer.withOpacity(0.35),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                     side: BorderSide(
-                      color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.outline.withOpacity(0.2),
                     ),
                   ),
                   child: InkWell(
@@ -386,23 +399,24 @@ class _ConsumptionEditScreenState extends State<ConsumptionEditScreen> {
                               children: [
                                 Text(
                                   '父级储值记录',
-                                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurfaceVariant,
                                       ),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
                                   s.customerName,
-                                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                        fontWeight: FontWeight.w600,
-                                      ),
+                                  style: Theme.of(context).textTheme.titleSmall
+                                      ?.copyWith(fontWeight: FontWeight.w600),
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
                                   '$storageDateStr · ¥${s.amount.toStringAsFixed(0)} · 编号 ${s.code}',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        color: Colors.grey[700],
-                                      ),
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(color: Colors.grey[700]),
                                 ),
                               ],
                             ),

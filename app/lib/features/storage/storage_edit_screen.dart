@@ -20,6 +20,7 @@ import '../../core/data_refresh.dart';
 import '../../core/demo_mode.dart';
 import '../../core/error_message.dart';
 import '../../core/formula_helper.dart';
+import '../../core/write_request_id.dart';
 import '../auth/auth_service.dart';
 
 class StorageEditScreen extends StatefulWidget {
@@ -58,7 +59,11 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
 
   /// 保存流程中：遮罩防重复点击并提示「处理中」
   bool _saving = false;
+  bool _saveInProgress = false;
+  bool _optionsLoading = true;
+  String? _optionsError;
   String? _error;
+  final String _createRequestId = newWriteRequestId();
 
   /// 各小项当前库存余额（与保存校验同源），供小项选择器角标与保存时复用
   Map<int, int>? _cachedInventoryBalances;
@@ -92,17 +97,31 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
   static String _cacheKeyStorage(int id) => 'storage_$id';
 
   Future<void> _bootstrap() async {
-    await _loadOptions();
-    if (!mounted) return;
-    if (widget.storageId != null) {
-      await _loadStorage();
-    } else if (widget.copyFromId != null) {
-      await _loadCopy();
+    if (mounted)
+      setState(() {
+        _optionsLoading = true;
+        _optionsError = null;
+      });
+    try {
+      await _loadOptions();
+      if (!mounted) return;
+      if (widget.storageId != null) {
+        await _loadStorage();
+      } else if (widget.copyFromId != null) {
+        await _loadCopy();
+      }
+    } catch (e) {
+      if (mounted) setState(() => _optionsError = toUserFriendlyError(e));
+    } finally {
+      if (mounted) setState(() => _optionsLoading = false);
     }
   }
 
   Future<void> _loadOptions() async {
     final cache = context.read<DataCache>();
+    final auth = context.read<AuthService>();
+    final owner = auth.user?.id;
+    final revision = cache.revision;
     var smallOptions = cache.get<List<StorageSmallItemOption>>(
       _cacheKeySmallOptions,
     );
@@ -110,9 +129,14 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
     if (smallOptions == null || bigOptions == null) {
       final smallRepo = context.read<StorageSmallItemRepository>();
       final bigRepo = context.read<StorageBigItemRepository>();
-      smallOptions = await smallRepo.getAll();
-      bigOptions = await bigRepo.getAll();
-      if (!mounted) return;
+      final options = await Future.wait<dynamic>([
+        smallRepo.getAll(),
+        bigRepo.getAll(),
+      ]);
+      smallOptions = options[0] as List<StorageSmallItemOption>;
+      bigOptions = options[1] as List<StorageBigItemOption>;
+      if (!mounted || auth.user?.id != owner || cache.revision != revision)
+        return;
       cache.set(
         _cacheKeySmallOptions,
         smallOptions,
@@ -123,8 +147,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
     if (!mounted) return;
     final email = context.read<AuthService>().user?.email;
     setState(() {
-      _smallItemOptions =
-          DemoMode.filterSmallItemOptions(email, smallOptions!);
+      _smallItemOptions = DemoMode.filterSmallItemOptions(email, smallOptions!);
       _bigItemOptions = bigOptions!;
     });
     if (widget.storageId == null) {
@@ -366,13 +389,16 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
     final consumptionRepo = context.read<InventoryConsumptionRepository>();
     final smallItemRepo = context.read<StorageSmallItemRepository>();
 
+    final auth = context.read<AuthService>();
+    final owner = auth.user?.id;
     final batch = await Future.wait([
       purchaseRepo.getAll(),
       suppInRepo.getAll(),
       consumptionRepo.getAll(),
       smallItemRepo.getAll(),
     ]);
-    final email = context.read<AuthService>().user?.email;
+    if (auth.user?.id != owner) throw StateError('账号已变化，请重新打开页面');
+    final email = auth.user?.email;
     final scoped = DemoMode.scopeInventoryRaw(
       email: email,
       purchases: batch[0] as List<InventoryPurchaseRecordModel>,
@@ -392,6 +418,24 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
       _computeInventoryBalances();
 
   Future<void> _save() async {
+    if (_saveInProgress ||
+        _saving ||
+        _optionsLoading ||
+        _optionsError != null) {
+      return;
+    }
+    _saveInProgress = true;
+    try {
+      await _saveInternal();
+    } catch (e) {
+      if (mounted) setState(() => _error = toUserFriendlyError(e));
+    } finally {
+      _saveInProgress = false;
+      if (mounted) _endSavingOverlay();
+    }
+  }
+
+  Future<void> _saveInternal() async {
     if (!_formKey.currentState!.validate()) return;
 
     final customerName = _customerController.text.trim();
@@ -536,6 +580,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
       _beginSavingOverlay();
     }
 
+    if (!mounted) return;
     try {
       CustomerModel? cust = existingCustomer;
       if (cust == null || cust.name != customerName) {
@@ -566,6 +611,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
         remark: _remarkController.text.trim().isEmpty
             ? null
             : _remarkController.text.trim(),
+        clientRequestId: existing?.clientRequestId ?? _createRequestId,
       );
 
       final StorageRecordModel saved = widget.storageId != null
@@ -576,7 +622,8 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
         final consumptionRepo = context.read<InventoryConsumptionRepository>();
         final remarkBase = '自动出库 · $customerName';
         final toInsert = <InventoryConsumptionRecordModel>[];
-        for (final id in _selectedSmallItemIds) {
+        for (var index = 0; index < _selectedSmallItemIds.length; index++) {
+          final id = _selectedSmallItemIds[index];
           final q = _outQtyBySmallItemId[id] ?? 1;
           if (q <= 0) continue;
           toInsert.add(
@@ -587,6 +634,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
               quantity: q,
               remark: remarkBase,
               sourceStorageRecordId: saved.id,
+              clientRequestId: childWriteRequestId(_createRequestId, index),
             ),
           );
         }
@@ -761,7 +809,9 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
         title: Text(isEdit ? '编辑储值' : '新增储值'),
         actions: [
           TextButton(
-            onPressed: _saving ? null : _save,
+            onPressed: _saving || _optionsLoading || _optionsError != null
+                ? null
+                : _save,
             child: _saving
                 ? const SizedBox(
                     width: 20,
@@ -779,6 +829,17 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                if (_optionsLoading) const LinearProgressIndicator(),
+                if (_optionsError != null)
+                  MaterialBanner(
+                    content: Text(_optionsError!),
+                    actions: [
+                      TextButton(
+                        onPressed: _bootstrap,
+                        child: const Text('重新加载'),
+                      ),
+                    ],
+                  ),
                 if (_error != null) ...[
                   Text(_error!, style: const TextStyle(color: Colors.red)),
                   const SizedBox(height: 16),

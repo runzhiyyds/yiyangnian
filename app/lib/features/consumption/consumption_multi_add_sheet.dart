@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/data_refresh.dart';
 import '../../core/error_message.dart';
+import '../../core/write_request_id.dart';
 import '../storage/storage_model.dart';
 import '../storage/storage_small_item_picker.dart';
 import '../storage_options/storage_small_item_repository.dart';
@@ -29,11 +30,13 @@ class _ConsumptionDraft {
     required this.date,
     required this.projectIds,
     this.remark = '',
-  });
+    String? requestId,
+  }) : requestId = requestId ?? newWriteRequestId();
 
   DateTime date;
   List<int> projectIds;
   String remark;
+  final String requestId;
 }
 
 class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
@@ -52,10 +55,7 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
         ? [widget.storage.storageSmallItemIds.first]
         : <int>[];
     _drafts.add(
-      _ConsumptionDraft(
-        date: DateTime.now(),
-        projectIds: defaultProjectIds,
-      ),
+      _ConsumptionDraft(date: DateTime.now(), projectIds: defaultProjectIds),
     );
   }
 
@@ -85,10 +85,7 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
         : <int>[];
     setState(() {
       _drafts.add(
-        _ConsumptionDraft(
-          date: DateTime.now(),
-          projectIds: defaultProjectIds,
-        ),
+        _ConsumptionDraft(date: DateTime.now(), projectIds: defaultProjectIds),
       );
     });
   }
@@ -101,12 +98,12 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
   }
 
   Future<void> _saveAll() async {
+    if (_loading) return;
     if (_drafts.isEmpty) return;
 
     final validDrafts = _drafts;
     if (validDrafts.length > widget.remainingCount) {
-      final msg =
-          '新增消费条数不能超过剩余次数（当前剩余 ${widget.remainingCount} 次）';
+      final msg = '新增消费条数不能超过剩余次数（当前剩余 ${widget.remainingCount} 次）';
       setState(() {
         _error = msg;
       });
@@ -167,12 +164,10 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
             code: '',
             consumptionDate: draft.date,
             storageRecordId: storageId,
-            consumptionProjectId:
-                projIds.isNotEmpty ? projIds.first : null,
+            consumptionProjectId: projIds.isNotEmpty ? projIds.first : null,
             consumptionProjectIds: List<int>.from(projIds),
-            remark: draft.remark.trim().isEmpty
-                ? null
-                : draft.remark.trim(),
+            remark: draft.remark.trim().isEmpty ? null : draft.remark.trim(),
+            clientRequestId: draft.requestId,
           ),
         );
         createdRecords.add(created);
@@ -190,9 +185,9 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
         _loading = false;
         _error = toUserFriendlyError(e);
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('保存失败：${toUserFriendlyError(e)}')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('保存失败：${toUserFriendlyError(e)}')));
     }
   }
 
@@ -224,25 +219,20 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
                 children: [
                   Text(
                     '批量新增消费',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     '${widget.storage.customerName} · 剩余次数：${widget.remainingCount}',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.copyWith(color: Colors.grey[600]),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyMedium?.copyWith(color: Colors.grey[600]),
                   ),
                   const SizedBox(height: 8),
                   if (_error != null) ...[
-                    Text(
-                      _error!,
-                      style: const TextStyle(color: Colors.red),
-                    ),
+                    Text(_error!, style: const TextStyle(color: Colors.red)),
                     const SizedBox(height: 8),
                   ],
                 ],
@@ -257,13 +247,13 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
                   // 储值无小项时使用全量，否则仅限储值已有小项
                   final projectOptions = validIds.isEmpty
                       ? allOptions
-                      : allOptions.where((o) => validIds.contains(o.id)).toList();
+                      : allOptions
+                            .where((o) => validIds.contains(o.id))
+                            .toList();
 
                   if (snapshot.connectionState == ConnectionState.waiting &&
                       allOptions.isEmpty) {
-                    return const Center(
-                      child: CircularProgressIndicator(),
-                    );
+                    return const Center(child: CircularProgressIndicator());
                   }
 
                   return ListView.builder(
@@ -346,10 +336,9 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
               children: [
                 Text(
                   '消费 ${index + 1}',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w600),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
                 ),
                 const Spacer(),
                 if (_drafts.length > 1)
@@ -375,8 +364,7 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
                         context: context,
                         initialDate: draft.date,
                         firstDate: DateTime(2020),
-                        lastDate:
-                            DateTime.now().add(const Duration(days: 365)),
+                        lastDate: DateTime.now().add(const Duration(days: 365)),
                         locale: const Locale('zh', 'CN'),
                       );
                       if (d != null) {
@@ -432,4 +420,3 @@ class _ConsumptionMultiAddSheetState extends State<ConsumptionMultiAddSheet> {
     );
   }
 }
-

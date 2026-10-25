@@ -11,10 +11,13 @@ class DataCache {
   /// 最大缓存条目数，null 表示不限制。超过时淘汰最早写入的 key。
   final int? maxSize;
 
+  int _revision = 0;
+  int get revision => _revision;
+
   T? get<T>(String key) {
     final exp = _expiry[key];
     if (exp != null && DateTime.now().isAfter(exp)) {
-      remove(key);
+      _discard(key);
       return null;
     }
     final v = _store[key];
@@ -42,7 +45,18 @@ class DataCache {
     _store[key] = value;
   }
 
+  T? take<T>(String key) {
+    final value = get<T>(key);
+    _discard(key);
+    return value;
+  }
+
   void remove(String key) {
+    _revision++;
+    _discard(key);
+  }
+
+  void _discard(String key) {
     _store.remove(key);
     _keyOrder.remove(key);
     _expiry.remove(key);
@@ -50,6 +64,7 @@ class DataCache {
 
   /// 移除所有以 [prefix] 开头的 key，用于按模块失效。
   void removeByPrefix(String prefix) {
+    _revision++;
     final toRemove = _store.keys.where((k) => k.startsWith(prefix)).toList();
     for (final k in toRemove) {
       _store.remove(k);
@@ -59,6 +74,7 @@ class DataCache {
   }
 
   void clear() {
+    _revision++;
     _store.clear();
     _keyOrder.clear();
     _expiry.clear();

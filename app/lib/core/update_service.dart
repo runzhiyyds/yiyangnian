@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'config.dart';
@@ -28,24 +27,9 @@ class UpdateInfo {
   });
 }
 
-class DownloadProgress {
-  final int received;
-  final int total;
-
-  const DownloadProgress({
-    required this.received,
-    required this.total,
-  });
-
-  double get progress {
-    if (total <= 0) return 0;
-    if (received <= 0) return 0;
-    return received / total;
-  }
-}
-
 class UpdateService {
   static const MethodChannel _channel = MethodChannel('app.update/channel');
+
   static Future<String> getCurrentVersion() async {
     final info = await PackageInfo.fromPlatform();
     return info.version;
@@ -71,9 +55,9 @@ class UpdateService {
   static Future<UpdateInfo?> checkUpdate() async {
     if (!Config.hasUpdateCheck) return null;
     try {
-      final res = await http.get(Uri.parse(Config.updateCheckUrl)).timeout(
-        const Duration(seconds: 10),
-      );
+      final res = await http
+          .get(Uri.parse(Config.updateCheckUrl))
+          .timeout(const Duration(seconds: 10));
       if (res.statusCode != 200) return null;
       final json = jsonDecode(res.body) as Map<String, dynamic>?;
       if (json == null) return null;
@@ -97,7 +81,8 @@ class UpdateService {
     if (!Config.hasPgyerCheck) return null;
     try {
       final current = await getCurrentVersion();
-      final body = '_api_key=${Uri.encodeComponent(Config.pgyerApiKey)}'
+      final body =
+          '_api_key=${Uri.encodeComponent(Config.pgyerApiKey)}'
           '&appKey=${Uri.encodeComponent(Config.pgyerAppKey)}'
           '&buildVersion=${Uri.encodeComponent(current)}';
       final res = await http
@@ -115,12 +100,10 @@ class UpdateService {
       // 蒲公英返回形如：{ code, message, data: { buildHaveNewVersion, buildVersion, ... } }
       final d = data['data'] as Map<String, dynamic>?;
       if (d == null) return null;
-      final buildHaveNewVersion = d['buildHaveNewVersion'] as bool? ?? false;
       final buildVersion =
           (d['buildVersion'] ?? d['buildVersionNo']) as String?;
       if (buildVersion == null || buildVersion.isEmpty) return null;
-      final directUrl =
-          (d['downloadURL'] ?? d['downloadUrl']) as String?;
+      final directUrl = (d['downloadURL'] ?? d['downloadUrl']) as String?;
       final pageUrl = (d['appUrl'] ?? d['appURl']) as String?;
       return UpdateInfo(
         latestVersion: buildVersion,
@@ -142,63 +125,32 @@ class UpdateService {
     return launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
-  /// 下载 APK 文件到本地，下载过程可通过 [onProgress] 回调观察进度。
-  static Future<File> downloadApk(
-    String url, {
-    void Function(DownloadProgress progress)? onProgress,
+  /// 交给 Android DownloadManager 后台下载。系统通知栏会显示进度，
+  /// 下载完成后由原生层进入安装流程。
+  static Future<int> startBackgroundDownload({
+    required String apkUrl,
+    required String version,
+    String? fallbackUrl,
   }) async {
-    final uri = Uri.tryParse(url);
-    if (uri == null) {
-      throw ArgumentError('Invalid download url: $url');
+    if (!Platform.isAndroid) {
+      throw UnsupportedError('Background APK download is Android-only');
     }
-    final client = http.Client();
-    try {
-      final request = http.Request('GET', uri);
-      final response = await client.send(request);
-      if (response.statusCode != 200) {
-        throw HttpException(
-          'Download failed, status code ${response.statusCode}',
-          uri: uri,
-        );
-      }
-      final total = response.contentLength ?? -1;
-      final dir = await _resolveApkDirectory();
-      final file = File(
-        '${dir.path}/update-${DateTime.now().millisecondsSinceEpoch}.apk',
-      );
-      final sink = file.openWrite();
-      var received = 0;
-      await for (final chunk in response.stream) {
-        received += chunk.length;
-        sink.add(chunk);
-        if (onProgress != null) {
-          onProgress(
-            DownloadProgress(
-              received: received,
-              total: total,
-            ),
-          );
-        }
-      }
-      await sink.close();
-      return file;
-    } finally {
-      client.close();
+    final uri = Uri.tryParse(apkUrl);
+    if (uri == null || !uri.hasScheme) {
+      throw ArgumentError('Invalid APK download url');
     }
+    final id = await _channel.invokeMethod<int>('startBackgroundDownload', {
+      'url': apkUrl,
+      'version': version,
+      'fallbackUrl': fallbackUrl,
+    });
+    if (id == null) throw StateError('Android did not return a download id');
+    return id;
   }
 
-  static Future<Directory> _resolveApkDirectory() async {
-    if (Platform.isAndroid) {
-      final dir = await getExternalStorageDirectory();
-      if (dir != null) return dir;
-    }
-    return getTemporaryDirectory();
-  }
-
-  /// 调起原生安装 APK，具体由 Android 端通过 FileProvider + Intent 处理。
-  static Future<void> installApk(String filePath) async {
-    if (!Platform.isAndroid) return;
-    if (filePath.isEmpty) return;
-    await _channel.invokeMethod('installApk', {'filePath': filePath});
+  static Future<bool> isBackgroundDownloadActive() async {
+    if (!Platform.isAndroid) return false;
+    return await _channel.invokeMethod<bool>('isBackgroundDownloadActive') ??
+        false;
   }
 }

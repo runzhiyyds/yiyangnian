@@ -36,11 +36,11 @@ class _TreeScreenState extends State<TreeScreen> {
   /// [forceRefresh] 为 true 时忽略缓存重新请求（如下拉刷新、数据变更后）
   Future<void> _ensureLoad({bool forceRefresh = false}) async {
     if (!mounted) return;
-    context.read<TreeDataProvider>().load(context, forceRefresh: forceRefresh);
+    await context.read<TreeDataProvider>().load(context, forceRefresh: forceRefresh);
   }
 
   void _onDataChanged() {
-    if (mounted) context.read<TreeDataProvider>().load(context, forceRefresh: true);
+    if (mounted) context.read<TreeDataProvider>().load(context, forceRefresh: true, invalidateReads: false);
   }
 
   @override
@@ -53,10 +53,10 @@ class _TreeScreenState extends State<TreeScreen> {
   @override
   Widget build(BuildContext context) {
     final treeData = context.watch<TreeDataProvider>();
-    if (treeData.loading) {
+    if (treeData.loading && !treeData.hasLoaded) {
       return const Center(child: FullPageLoadingPlaceholder());
     }
-    if (treeData.error != null) {
+    if (treeData.error != null && !treeData.hasLoaded) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -70,7 +70,7 @@ class _TreeScreenState extends State<TreeScreen> {
               ),
               const SizedBox(height: 20),
               FilledButton(
-                onPressed: () => _ensureLoad(),
+                onPressed: () => _ensureLoad(forceRefresh: true),
                 child: const Text('重试'),
               ),
               const SizedBox(height: 12),
@@ -97,6 +97,11 @@ class _TreeScreenState extends State<TreeScreen> {
         onRefresh: () => _ensureLoad(forceRefresh: true),
         child: CustomScrollView(
           slivers: [
+            if (treeData.loading) const SliverToBoxAdapter(child: LinearProgressIndicator()),
+            if (treeData.error != null) SliverToBoxAdapter(child: MaterialBanner(
+              content: Text('刷新失败，显示上次加载的客户信息。${treeData.error}'),
+              actions: [TextButton(onPressed: () => _ensureLoad(forceRefresh: true), child: const Text('重试'))],
+            )),
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -177,33 +182,38 @@ class _CustomerTreeTile extends StatelessWidget {
     final subtitle = [phoneStr, lifeStr].where((s) => s.isNotEmpty).join(' · ');
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          leading: const Icon(Icons.person_outline, size: 28),
-          title: Text(
-            customer.name,
-            style: const TextStyle(fontWeight: FontWeight.bold),
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.person_outline, size: 28),
+            title: Text(
+              customer.name,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: subtitle.isNotEmpty
+                ? Text(subtitle, style: TextStyle(fontSize: 13, color: Colors.grey[600]))
+                : null,
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async => await onTap(),
           ),
-          subtitle: subtitle.isNotEmpty
-              ? Text(subtitle, style: TextStyle(fontSize: 13, color: Colors.grey[600]))
-              : null,
-          trailing: IconButton(
-            icon: const Icon(Icons.arrow_forward),
-            onPressed: () async => await onTap(),
-          ),
-          children: storages.isEmpty
-              ? [
-                  const ListTile(
-                    title: Text('暂无储值记录', style: TextStyle(color: Colors.grey)),
-                  )
-                ]
-              : storages
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              leading: const SizedBox(width: 28),
+              title: Text(
+                storages.isEmpty ? '暂无储值记录' : '查看储值记录（${storages.length}）',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: storages.isEmpty ? Colors.grey : null,
+                ),
+              ),
+              enabled: storages.isNotEmpty,
+              tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+              children: storages
                   .map((s) => _StorageTreeTile(
                         storage: s,
                         customerName: customer.name,
-                        consumptions:
-                            consumptionsByStorage[s.id] ?? [],
+                        consumptions: consumptionsByStorage[s.id] ?? [],
                         smallItemNames: smallItemNames,
                         onRefresh: onRefresh,
                         onStorageTap: () async {
@@ -212,7 +222,9 @@ class _CustomerTreeTile extends StatelessWidget {
                         },
                       ))
                   .toList(),
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }

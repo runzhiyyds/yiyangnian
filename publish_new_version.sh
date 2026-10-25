@@ -32,7 +32,7 @@ rm -rf "$APP_DIR/build" 2>/dev/null || true
 flutter clean
 flutter pub get
 
-echo "🔨 构建 Debug APK（与 run_android.sh 安装的构建类型完全一致，避免发布包无法连接服务器）..."
+echo "🔨 构建 Release APK（移除调试引擎、调试内核和 DEBUG 标识）..."
 if [ -f "env.json" ]; then
   if grep -q "REPLACE_ME" env.json 2>/dev/null; then
     echo "❌ env.json 中仍包含 REPLACE_ME，请先填写 SUPABASE_URL 和 SUPABASE_ANON_KEY 后再发布"
@@ -48,8 +48,8 @@ if [ -f "env.json" ]; then
     fi
     echo "  已生成: $(grep -o "kSupabaseUrl = '[^']*'" lib/core/env_generated.dart | head -1 | cut -c1-50)..."
   fi
-  echo "📌 构建 Debug APK（与本地 flutter run / run_android.sh 同一构建类型，保证网络等行为一致）"
-  flutter build apk --debug
+  echo "📌 构建 Release APK（Android 主清单已显式声明 INTERNET 权限）"
+  flutter build apk --release
 else
   echo "❌ 未找到 app/env.json，无法构建可连接服务器的发布包。请先配置 env.json 后再发布。"
   exit 1
@@ -61,7 +61,7 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "✅ APK 构建成功！"
-APK_PATH="$APP_DIR/build/app/outputs/flutter-apk/app-debug.apk"
+APK_PATH="$APP_DIR/build/app/outputs/flutter-apk/app-release.apk"
 SIZE=$(du -h "$APK_PATH" | cut -f1)
 
 echo ""
@@ -73,7 +73,7 @@ echo ""
 
 # 自动上传到蒲公英（若已配置 PGYER_API_KEY）
 if [ -n "$PGYER_API_KEY" ]; then
-  echo "📤 正在上传到蒲公英（约 153MB，请耐心等待）..."
+  echo "📤 正在上传 Release APK 到蒲公英（文件大小 ${SIZE}）..."
   # 使用 api.pgyer.com（官方 API 域名），非 www.pgyer.com；大文件需延长超时
   UPLOAD_RESULT=$(curl -s --connect-timeout 30 --max-time 600 -F "file=@$APK_PATH" -F "_api_key=$PGYER_API_KEY" -F "buildUpdateDescription=${RELEASE_NOTE}" "https://api.pgyer.com/apiv2/app/upload")
   SHORTCUT=$(echo "$UPLOAD_RESULT" | grep -o '"buildShortcutUrl":"[^"]*"' | cut -d'"' -f4)

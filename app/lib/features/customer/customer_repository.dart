@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/repository_read_cache.dart';
+
 import 'customer_model.dart';
 
 /// 客户数据仓库抽象，便于单测注入 Mock/Fake。
@@ -18,19 +20,25 @@ abstract class CustomerRepositoryBase {
 }
 
 class CustomerRepository implements CustomerRepositoryBase {
-  CustomerRepository(this._client);
+  CustomerRepository(this._client, {RepositoryReadCache? readCache})
+    : _readCache = readCache;
 
   final SupabaseClient _client;
+  final RepositoryReadCache? _readCache;
 
-  Future<List<CustomerModel>> getAll() async {
-    final res = await _client
-        .from('customers')
-        .select()
-        .order('name');
-    return (res as List)
-        .map((e) => CustomerModel.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList();
-  }
+  Future<List<T>> _read<T>(String key, Future<List<T>> Function() load) =>
+      _readCache?.read<T>(key, load) ?? load();
+
+  Future<List<CustomerModel>> getAll() =>
+      _read('CustomerRepository.getAll', () async {
+        final res = await _client.from('customers').select().order('name');
+        return (res as List)
+            .map(
+              (e) =>
+                  CustomerModel.fromJson(Map<String, dynamic>.from(e as Map)),
+            )
+            .toList();
+      });
 
   Future<CustomerModel?> getByName(String name) async {
     final res = await _client
@@ -52,42 +60,49 @@ class CustomerRepository implements CustomerRepositoryBase {
   }
 
   Future<CustomerModel> create(CustomerModel customer) async {
-    final res = await _client
-        .from('customers')
-        .insert(customer.toJson())
-        .select()
-        .single();
-    return CustomerModel.fromJson(Map<String, dynamic>.from(res as Map));
+    try {
+      final res = await _client
+          .from('customers')
+          .insert(customer.toJson())
+          .select()
+          .single();
+      return CustomerModel.fromJson(Map<String, dynamic>.from(res as Map));
+    } finally {
+      _readCache?.clear();
+    }
   }
 
   Future<CustomerModel> update(String oldName, CustomerModel customer) async {
-    // 仅更新 customers；storage_records.customer_name 依赖外键 ON UPDATE CASCADE 自动同步
-    // 若未执行迁移 007_customer_name_fk_on_update_cascade.sql，改名会报外键错误
-    final res = await _client
-        .from('customers')
-        .update(customer.toJson())
-        .eq('name', oldName)
-        .select()
-        .single();
-    return CustomerModel.fromJson(Map<String, dynamic>.from(res as Map));
+    try {
+      // 仅更新 customers；storage_records.customer_name 依赖外键 ON UPDATE CASCADE 自动同步
+      // 若未执行迁移 007_customer_name_fk_on_update_cascade.sql，改名会报外键错误
+      final res = await _client
+          .from('customers')
+          .update(customer.toJson())
+          .eq('name', oldName)
+          .select()
+          .single();
+      return CustomerModel.fromJson(Map<String, dynamic>.from(res as Map));
+    } finally {
+      _readCache?.clear();
+    }
   }
 
   Future<void> delete(String name) async {
-    await _client.from('customers').delete().eq('name', name);
+    try {
+      await _client.from('customers').delete().eq('name', name);
+    } finally {
+      _readCache?.clear();
+    }
   }
 
-  /// 级联删除：先删该客户下所有储值的消费记录，再删储值，最后删客户
+  /// 级联删除交给数据库外键在同一事务中完成，避免客户端多请求导致半删状态。
   Future<void> deleteCascade(String name) async {
-    final storages = await _client
-        .from('storage_records')
-        .select('id')
-        .eq('customer_name', name);
-    for (final s in storages as List) {
-      final id = s['id'] as int;
-      await _client.from('consumption_records').delete().eq('storage_record_id', id);
+    try {
+      await _client.from('customers').delete().eq('name', name);
+    } finally {
+      _readCache?.clear();
     }
-    await _client.from('storage_records').delete().eq('customer_name', name);
-    await _client.from('customers').delete().eq('name', name);
   }
 
   /// 累计储值 = 该客户所有储值记录的 amount 之和
@@ -122,18 +137,27 @@ class CustomerRepository implements CustomerRepositoryBase {
         .from('storage_records')
         .select('id, total_count')
         .eq('customer_name', customerName);
-    int total = 0;
-    for (final s in storages as List) {
-      final id = s['id'] as int;
-      final totalCount = s['total_count'] as int? ?? 0;
-      final consumed = await _client
-          .from('consumption_records')
-          .select()
-          .eq('storage_record_id', id);
-      final count = (consumed as List).length;
-      total += totalCount - count;
+    final rows = storages as List;
+    if (rows.isEmpty) return 0;
+    final storageIds = rows.map((s) => s['id'] as int).toList();
+    final consumptions = await _client
+        .from('consumption_records')
+        .select('storage_record_id')
+        .inFilter('storage_record_id', storageIds);
+    final consumedByStorage = <int, int>{};
+    for (final row in consumptions as List) {
+      final storageId = row['storage_record_id'] as int;
+      consumedByStorage.update(
+        storageId,
+        (count) => count + 1,
+        ifAbsent: () => 1,
+      );
     }
-    return total;
+    return rows.fold<int>(0, (total, storage) {
+      final id = storage['id'] as int;
+      final totalCount = storage['total_count'] as int? ?? 0;
+      return total + totalCount - (consumedByStorage[id] ?? 0);
+    });
   }
 
   /// 关联储值编号列表

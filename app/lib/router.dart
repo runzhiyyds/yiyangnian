@@ -18,11 +18,13 @@ import 'features/settings/settings_screen.dart';
 import 'features/inventory/inventory_options_screen.dart';
 import 'features/inventory/inventory_purchase_edit_screen.dart';
 import 'features/inventory/inventory_item_detail_screen.dart';
+import 'features/inventory/inventory_linked_storages_screen.dart';
 import 'features/inventory/inventory_supp_in_edit_screen.dart';
 import 'features/inventory/inventory_supp_out_edit_screen.dart';
 
 class AppRouter {
-  static final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+  static final GlobalKey<NavigatorState> rootNavigatorKey =
+      GlobalKey<NavigatorState>();
 
   static GoRouter create(AuthService auth) => GoRouter(
     navigatorKey: rootNavigatorKey,
@@ -30,42 +32,33 @@ class AppRouter {
     refreshListenable: auth,
     redirect: (context, state) {
       final loc = state.matchedLocation;
-      if (!Config.isSupabaseConfigured) {
+      if (!Config.isBackendConfigured) {
         return loc == '/splash' ? null : '/splash';
       }
       if (loc == '/splash') return null;
       // 已在本进程内登录后访问登录页时直接进入首页
-      if (auth.isLoggedIn && loc == '/login') return '/home/tree';
+      if (auth.isLoggedIn && loc == '/login') return '/home/inventory';
       // 未登录：仅允许启动页与登录页
       if (!auth.isLoggedIn) {
         if (loc == '/login') return null;
         return '/login';
       }
-      if (loc == '/home' || loc == '/') return '/home/tree';
+      if (loc == '/home' || loc == '/') return '/home/inventory';
       return null;
     },
     routes: [
-      GoRoute(
-        path: '/splash',
-        builder: (_, __) => const SplashScreen(),
-      ),
-      GoRoute(
-        path: '/login',
-        builder: (_, __) => const LoginScreen(),
-      ),
-      GoRoute(
-        path: '/home',
-        redirect: (_, __) => '/home/tree',
-      ),
-      GoRoute(
-        path: '/',
-        redirect: (_, __) => '/home/tree',
-      ),
+      GoRoute(path: '/splash', builder: (_, __) => const SplashScreen()),
+      GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
+      GoRoute(path: '/home', redirect: (_, __) => '/home/inventory'),
+      GoRoute(path: '/', redirect: (_, __) => '/home/inventory'),
       GoRoute(
         path: '/customer/new',
         builder: (context, state) {
           final p = CustomerNewParams.fromState(state);
-          return CustomerEditScreen(templateName: p.templateName, initialName: p.initialName);
+          return CustomerEditScreen(
+            templateName: p.templateName,
+            initialName: p.initialName,
+          );
         },
       ),
       GoRoute(
@@ -98,7 +91,8 @@ class AppRouter {
         path: '/storage/:id',
         builder: (context, state) {
           final p = StorageDetailParams.fromState(state);
-          if (p == null) return const _InvalidParamRedirect(to: '/home/storage');
+          if (p == null)
+            return const _InvalidParamRedirect(to: '/home/storage');
           return StorageDetailScreen(storageId: p.storageId);
         },
         routes: [
@@ -106,7 +100,8 @@ class AppRouter {
             path: 'edit',
             builder: (context, state) {
               final p = StorageDetailParams.fromState(state);
-              if (p == null) return const _InvalidParamRedirect(to: '/home/storage');
+              if (p == null)
+                return const _InvalidParamRedirect(to: '/home/storage');
               return StorageEditScreen(storageId: p.storageId);
             },
           ),
@@ -123,7 +118,8 @@ class AppRouter {
         path: '/consumption/:id/edit',
         builder: (context, state) {
           final p = ConsumptionEditParams.fromState(state);
-          if (p == null || p.consumptionId == null) return const _InvalidParamRedirect(to: '/home/tree');
+          if (p == null || p.consumptionId == null)
+            return const _InvalidParamRedirect(to: '/home/tree');
           return ConsumptionEditScreen(consumptionId: p.consumptionId);
         },
       ),
@@ -136,18 +132,49 @@ class AppRouter {
         builder: (_, __) => const InventoryPurchaseEditScreen(),
       ),
       GoRoute(
+        path: '/inventory/purchase/:id',
+        builder: (context, state) {
+          final id = int.tryParse(state.pathParameters['id'] ?? '');
+          if (id == null)
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          return InventoryPurchaseEditScreen(
+            purchaseId: id,
+            initialReadOnly: true,
+          );
+        },
+      ),
+      GoRoute(
         path: '/inventory/purchase/:id/edit',
         builder: (context, state) {
           final id = int.tryParse(state.pathParameters['id'] ?? '');
-          if (id == null) return const _InvalidParamRedirect(to: '/home/inventory');
-          return InventoryPurchaseEditScreen(purchaseId: id);
+          if (id == null)
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          // 兼容旧链接，但所有已有进货单必须先进入浏览态。
+          return InventoryPurchaseEditScreen(
+            purchaseId: id,
+            initialReadOnly: true,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/inventory/item/:smallItemId/storages',
+        builder: (context, state) {
+          final id = int.tryParse(state.pathParameters['smallItemId'] ?? '');
+          if (id == null) {
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          }
+          return InventoryLinkedStoragesScreen(
+            smallItemId: id,
+            initialSmallItemName: state.uri.queryParameters['name'],
+          );
         },
       ),
       GoRoute(
         path: '/inventory/item/:smallItemId',
         builder: (context, state) {
           final id = int.tryParse(state.pathParameters['smallItemId'] ?? '');
-          if (id == null) return const _InvalidParamRedirect(to: '/home/inventory');
+          if (id == null)
+            return const _InvalidParamRedirect(to: '/home/inventory');
           return InventoryItemDetailScreen(smallItemId: id);
         },
       ),
@@ -164,11 +191,21 @@ class AppRouter {
         },
       ),
       GoRoute(
+        path: '/inventory/supp-in/:id',
+        builder: (context, state) {
+          final id = int.tryParse(state.pathParameters['id'] ?? '');
+          if (id == null)
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          return InventorySuppInEditScreen(recordId: id, initialReadOnly: true);
+        },
+      ),
+      GoRoute(
         path: '/inventory/supp-in/:id/edit',
         builder: (context, state) {
           final id = int.tryParse(state.pathParameters['id'] ?? '');
-          if (id == null) return const _InvalidParamRedirect(to: '/home/inventory');
-          return InventorySuppInEditScreen(recordId: id);
+          if (id == null)
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          return InventorySuppInEditScreen(recordId: id, initialReadOnly: true);
         },
       ),
       GoRoute(
@@ -184,11 +221,27 @@ class AppRouter {
         },
       ),
       GoRoute(
+        path: '/inventory/supp-out/:id',
+        builder: (context, state) {
+          final id = int.tryParse(state.pathParameters['id'] ?? '');
+          if (id == null)
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          return InventorySuppOutEditScreen(
+            recordId: id,
+            initialReadOnly: true,
+          );
+        },
+      ),
+      GoRoute(
         path: '/inventory/supp-out/:id/edit',
         builder: (context, state) {
           final id = int.tryParse(state.pathParameters['id'] ?? '');
-          if (id == null) return const _InvalidParamRedirect(to: '/home/inventory');
-          return InventorySuppOutEditScreen(recordId: id);
+          if (id == null)
+            return const _InvalidParamRedirect(to: '/home/inventory');
+          return InventorySuppOutEditScreen(
+            recordId: id,
+            initialReadOnly: true,
+          );
         },
       ),
       StatefulShellRoute.indexedStack(
@@ -199,20 +252,18 @@ class AppRouter {
           StatefulShellBranch(
             routes: [
               GoRoute(
-                path: '/home/tree',
-                pageBuilder: (context, state) => const NoTransitionPage(
-                  child: TreeScreen(),
-                ),
+                path: '/home/inventory',
+                pageBuilder: (context, state) =>
+                    const NoTransitionPage(child: InventoryOptionsScreen()),
               ),
             ],
           ),
           StatefulShellBranch(
             routes: [
               GoRoute(
-                path: '/home/inventory',
-                pageBuilder: (context, state) => const NoTransitionPage(
-                  child: InventoryOptionsScreen(),
-                ),
+                path: '/home/tree',
+                pageBuilder: (context, state) =>
+                    const NoTransitionPage(child: TreeScreen()),
               ),
             ],
           ),
@@ -233,9 +284,8 @@ class AppRouter {
             routes: [
               GoRoute(
                 path: '/home/settings',
-                pageBuilder: (context, state) => const NoTransitionPage(
-                  child: SettingsScreen(),
-                ),
+                pageBuilder: (context, state) =>
+                    const NoTransitionPage(child: SettingsScreen()),
               ),
             ],
           ),

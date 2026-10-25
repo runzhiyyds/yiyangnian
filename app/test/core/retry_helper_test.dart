@@ -35,5 +35,29 @@ void main() {
       );
       expect(calls, 1);
     });
+
+    test('page-level transient retry is bounded to two attempts', () async {
+      var calls = 0;
+      await expectLater(
+        retryOnFailure(() async {
+          calls++;
+          throw Exception('502');
+        }, delay: const Duration(milliseconds: 1)),
+        throwsException,
+      );
+      expect(calls, 2);
+    });
+
+    test('business errors are not retried', () async {
+      var calls = 0;
+      await expectLater(
+        retryOnFailure(() async {
+          calls++;
+          throw Exception('invalid business input');
+        }, delay: const Duration(milliseconds: 1)),
+        throwsException,
+      );
+      expect(calls, 1);
+    });
   });
 }
