@@ -227,7 +227,7 @@ CREATE TABLE push_devices (
 CREATE OR REPLACE FUNCTION generate_storage_code()
 RETURNS text
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
@@ -244,7 +244,7 @@ $$;
 CREATE OR REPLACE FUNCTION generate_consumption_code()
 RETURNS text
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
@@ -261,7 +261,7 @@ $$;
 CREATE OR REPLACE FUNCTION generate_inventory_purchase_code()
 RETURNS text
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
@@ -278,7 +278,7 @@ $$;
 CREATE OR REPLACE FUNCTION initialize_current_account()
 RETURNS void
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
@@ -310,7 +310,9 @@ AS $$
 DECLARE
   v_owner text := auth.uid();
 BEGIN
-  IF v_owner IS NULL OR btrim(v_owner) = '' THEN
+  IF auth.role() IS DISTINCT FROM 'authenticated'
+    OR v_owner IS NULL
+    OR btrim(v_owner) = '' THEN
     RAISE EXCEPTION '未登录，无法绑定推送设备';
   END IF;
   IF p_device_token IS NULL OR btrim(p_device_token) = '' THEN
@@ -329,7 +331,7 @@ $$;
 CREATE OR REPLACE FUNCTION release_push_device(p_device_token text)
 RETURNS void
 LANGUAGE sql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
   UPDATE push_devices
