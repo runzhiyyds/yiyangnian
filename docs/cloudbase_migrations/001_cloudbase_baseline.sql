@@ -637,9 +637,30 @@ CREATE POLICY push_devices_owner_only ON push_devices
   FOR ALL TO authenticated
   USING (owner_id = auth.uid()) WITH CHECK (owner_id = auth.uid());
 
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon;
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM anon;
+REVOKE ALL ON
+  customers,
+  storage_big_item_options,
+  storage_small_item_options,
+  storage_records,
+  consumption_records,
+  inventory_purchase_records,
+  inventory_supplementary_in_records,
+  inventory_consumption_records,
+  push_devices
+FROM anon;
+REVOKE ALL ON SEQUENCE
+  storage_code_seq,
+  consumption_code_seq,
+  inventory_purchase_code_seq,
+  storage_big_item_options_id_seq,
+  storage_small_item_options_id_seq,
+  storage_records_id_seq,
+  consumption_records_id_seq,
+  inventory_purchase_records_id_seq,
+  inventory_supplementary_in_records_id_seq,
+  inventory_consumption_records_id_seq,
+  push_devices_id_seq
+FROM anon;
 
 GRANT USAGE ON SCHEMA public TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON
