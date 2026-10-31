@@ -129,7 +129,13 @@ class AppRouter {
       ),
       GoRoute(
         path: '/inventory/purchase/new',
-        builder: (_, __) => const InventoryPurchaseEditScreen(),
+        builder: (_, state) {
+          final p = InventoryPurchaseNewParams.fromState(state);
+          return InventoryPurchaseEditScreen(
+            initialBigItemId: p.initialBigItemId,
+            initialSmallItemId: p.initialSmallItemId,
+          );
+        },
       ),
       GoRoute(
         path: '/inventory/purchase/:id',

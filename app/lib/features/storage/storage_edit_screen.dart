@@ -50,7 +50,6 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
   int? _selectedBigItemId;
   List<int> _selectedSmallItemIds = [];
   final Map<int, int> _outQtyBySmallItemId = {};
-  bool _doOutboundThisTime = true;
 
   List<StorageBigItemOption> _bigItemOptions = [];
   List<StorageSmallItemOption> _smallItemOptions = [];
@@ -417,6 +416,90 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
   Future<Map<int, int>> _fetchInventoryBalances() =>
       _computeInventoryBalances();
 
+  Future<void> _editCustomerName() async {
+    if (widget.customerName != null && widget.storageId == null) return;
+    final controller = TextEditingController(text: _customerController.text);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('选择客户'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '客户姓名',
+            hintText: '请输入已录入的客户姓名',
+          ),
+          onSubmitted: (text) => Navigator.pop(ctx, text.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (value != null && value.isNotEmpty && mounted) {
+      setState(() => _customerController.text = value);
+    }
+  }
+
+  Future<void> _continuePurchaseForSmallItem(
+    StorageSmallItemOption option,
+  ) async {
+    final purchaseId = await context.push<int?>(
+      '/inventory/purchase/new',
+      extra: {
+        'initialBigItemId': option.storageBigItemId,
+        'initialSmallItemId': option.id,
+      },
+    );
+    if (!mounted) return;
+    context.read<DataRefreshNotifier>().invalidateInventory();
+    setState(() {
+      _cachedInventoryBalances = null;
+      _inventoryBalancesLoading = true;
+    });
+    _inventoryBalanceNotifier.value = null;
+    try {
+      final balances = await _fetchInventoryBalances();
+      if (!mounted) return;
+      final balance = balances[option.id] ?? 0;
+      setState(() {
+        _cachedInventoryBalances = balances;
+        _inventoryBalancesLoading = false;
+        if (balance > 0 && !_selectedSmallItemIds.contains(option.id)) {
+          _selectedSmallItemIds.add(option.id);
+          _outQtyBySmallItemId[option.id] = 1;
+        }
+      });
+      _inventoryBalanceNotifier.value = balances;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            balance > 0
+                ? '${option.name}进货完成，已自动选中'
+                : purchaseId == null
+                ? '未完成进货，${option.name}仍不可选'
+                : '未查到${option.name}的可用库存，请核对进货单',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _inventoryBalancesLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('库存刷新失败：${toUserFriendlyError(e)}')),
+      );
+    }
+  }
+
   Future<void> _save() async {
     if (_saveInProgress ||
         _saving ||
@@ -528,7 +611,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
     }
 
     final isNew = widget.storageId == null;
-    if (isNew && _doOutboundThisTime) {
+    if (isNew) {
       if (_cachedInventoryBalances == null) {
         _beginSavingOverlay();
       }
@@ -541,7 +624,10 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
       final deficits = <String>[];
       for (final id in _selectedSmallItemIds) {
         final q = _outQtyBySmallItemId[id] ?? 1;
-        if (q <= 0) continue;
+        if (q < 1) {
+          deficits.add('$id（出库数量不能小于 1）');
+          continue;
+        }
         final bal = balances[id] ?? 0;
         if (q > bal) {
           String name = id.toString();
@@ -618,14 +704,13 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
           ? await storageRepo.update(record)
           : await storageRepo.create(record);
 
-      if (isNew && _doOutboundThisTime) {
+      if (isNew) {
         final consumptionRepo = context.read<InventoryConsumptionRepository>();
         final remarkBase = '自动出库 · $customerName';
         final toInsert = <InventoryConsumptionRecordModel>[];
         for (var index = 0; index < _selectedSmallItemIds.length; index++) {
           final id = _selectedSmallItemIds[index];
           final q = _outQtyBySmallItemId[id] ?? 1;
-          if (q <= 0) continue;
           toInsert.add(
             InventoryConsumptionRecordModel(
               id: 0,
@@ -651,7 +736,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  '储值已保存，但库存出库写入失败：${toUserFriendlyError(e)}。请到库存管理中核对并手工补出库。',
+                  '储值已写入，但自动出库未完成：${toUserFriendlyError(e)}。请保持当前页面并再次点击保存，系统会补齐出库且不会重复创建储值。',
                 ),
                 duration: const Duration(seconds: 8),
               ),
@@ -659,7 +744,6 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
             context
                 .read<DataRefreshNotifier>()
                 .invalidateStorageConsumptionAndInventory();
-            context.pop();
           }
           return;
         }
@@ -669,9 +753,8 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
         final refresh = context.read<DataRefreshNotifier>();
         final didAutoOutbound =
             isNew &&
-            _doOutboundThisTime &&
             _selectedSmallItemIds.any(
-              (id) => (_outQtyBySmallItemId[id] ?? 1) > 0,
+              (id) => (_outQtyBySmallItemId[id] ?? 1) >= 1,
             );
         if (didAutoOutbound) {
           refresh.invalidateStorageConsumptionAndInventory();
@@ -729,15 +812,35 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
           next.add(opt);
         }
         _smallItemOptions = next..sort((a, b) => a.name.compareTo(b.name));
-        if (!_selectedSmallItemIds.contains(opt.id)) {
-          _selectedSmallItemIds.add(opt.id);
-        }
-        _outQtyBySmallItemId.putIfAbsent(opt.id, () => 1);
       });
       if (widget.storageId == null) {
         _inventoryBalanceNotifier.value = null;
         setState(() => _cachedInventoryBalances = null);
         _prefetchInventoryBalances();
+      }
+      final shouldPurchase = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('小项已新增'),
+          content: Text(
+            '“${opt.name}”当前库存为 0，暂时不能用于本次储值。可以现在进货，完成后会返回本页并自动选中。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('稍后进货'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('现在进货'),
+            ),
+          ],
+        ),
+      );
+      if (shouldPurchase == true && mounted) {
+        // 新建对话来自小项底部弹层，先关闭弹层再进入进货页。
+        Navigator.of(context).maybePop();
+        await _continuePurchaseForSmallItem(opt);
       }
       return opt.id;
     }
@@ -806,7 +909,13 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(isEdit ? '编辑储值' : '新增储值'),
+        title: Text(
+          isEdit
+              ? '编辑储值'
+              : _customerController.text.trim().isEmpty
+              ? '新增储值'
+              : '${_customerController.text.trim()} · 新增储值',
+        ),
         actions: [
           TextButton(
             onPressed: _saving || _optionsLoading || _optionsError != null
@@ -868,23 +977,32 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                         const SizedBox(height: 16),
-                        TextFormField(
-                          controller: _customerController,
-                          decoration: const InputDecoration(
-                            labelText: '客户姓名',
-                            hintText: '请输入或选择客户，不存在则新建',
+                        if (widget.customerName == null || isEdit) ...[
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.person_outline),
+                            title: Text(
+                              _customerController.text.trim().isEmpty
+                                  ? '请选择客户'
+                                  : _customerController.text.trim(),
+                            ),
+                            subtitle: const Text('客户'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: _editCustomerName,
                           ),
-                          readOnly:
-                              widget.customerName != null &&
-                              widget.storageId == null,
-                          validator: (v) => (v == null || v.trim().isEmpty)
-                              ? '请输入客户姓名'
-                              : null,
-                        ),
-                        const SizedBox(height: 16),
+                          const SizedBox(height: 8),
+                        ],
                         Text(
-                          '储值大项（单选）',
+                          '储值大项',
                           style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '一个大项对应一笔储值；其他大项请另建一笔储值',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(context).colorScheme.outline,
+                              ),
                         ),
                         const SizedBox(height: 8),
                         Wrap(
@@ -948,6 +1066,8 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
                                 : _inventoryBalanceNotifier,
                             selectedIds: _selectedSmallItemIds,
                             onAdd: (id) => setState(() {
+                              final balance = _cachedInventoryBalances?[id];
+                              if (balance != null && balance <= 0) return;
                               if (!_selectedSmallItemIds.contains(id)) {
                                 _selectedSmallItemIds.add(id);
                               }
@@ -958,57 +1078,48 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
                               _outQtyBySmallItemId.remove(id);
                             }),
                             onCreateNew: _addSmallItem,
+                            autoSelectCreated: false,
+                            onRestock: _continuePurchaseForSmallItem,
                           ),
                         if (showOutboundSection) ...[
                           const SizedBox(height: 20),
                           const Divider(),
                           const SizedBox(height: 8),
                           Text(
-                            '库存出库',
+                            '自动出库',
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
                           const SizedBox(height: 8),
-                          SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('本次从库存出库'),
-                            subtitle: const Text('关闭则仅保存储值，不扣减库存'),
-                            value: _doOutboundThisTime,
-                            onChanged: (v) =>
-                                setState(() => _doOutboundThisTime = v),
+                          Text(
+                            '保存储值后，以下小项会同时从库存出库。默认每项 1 件，最低为 1。',
+                            style: Theme.of(context).textTheme.bodySmall,
                           ),
-                          if (_doOutboundThisTime) ...[
-                            const SizedBox(height: 8),
-                            Text(
-                              '各小项出库数量（默认 1，≤0 则该项不出库）',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                            const SizedBox(height: 12),
-                            ..._selectedSmallItemIds.map((sid) {
-                              String label = sid.toString();
-                              for (final x in _smallItemOptions) {
-                                if (x.id == sid) {
-                                  label = x.name;
-                                  break;
-                                }
+                          const SizedBox(height: 12),
+                          ..._selectedSmallItemIds.map((sid) {
+                            String label = sid.toString();
+                            for (final x in _smallItemOptions) {
+                              if (x.id == sid) {
+                                label = x.name;
+                                break;
                               }
-                              final q = _outQtyBySmallItemId[sid] ?? 1;
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: Row(
-                                  children: [
-                                    Expanded(child: Text(label)),
-                                    QuantityStepper(
-                                      value: q,
-                                      min: 0,
-                                      onChanged: (v) => setState(() {
-                                        _outQtyBySmallItemId[sid] = v;
-                                      }),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }),
-                          ],
+                            }
+                            final q = _outQtyBySmallItemId[sid] ?? 1;
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Row(
+                                children: [
+                                  Expanded(child: Text(label)),
+                                  QuantityStepper(
+                                    value: q,
+                                    min: 1,
+                                    onChanged: (v) => setState(() {
+                                      _outQtyBySmallItemId[sid] = v;
+                                    }),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
                         ],
                         const SizedBox(height: 16),
                         ListTile(

@@ -32,6 +32,36 @@ class InventoryConsumptionRepository {
             .toList();
       });
 
+  /// 按出库业务日期（含首尾日期）查询，供店铺分析的周期汇总使用。
+  Future<List<InventoryConsumptionRecordModel>> getByDateRange(
+    DateTime start,
+    DateTime end,
+  ) => _read(
+    'InventoryConsumptionRepository.getByDateRange:${start.year}-${start.month}-${start.day}:${end.year}-${end.month}-${end.day}',
+    () async {
+      String dateOnly(DateTime date) =>
+          '${date.year.toString().padLeft(4, '0')}-'
+          '${date.month.toString().padLeft(2, '0')}-'
+          '${date.day.toString().padLeft(2, '0')}';
+
+      final res = await _client
+          .from('inventory_consumption_records')
+          .select()
+          .gte('consumption_date', dateOnly(start))
+          .lte('consumption_date', dateOnly(end))
+          .order('consumption_date', ascending: false)
+          .order('occurred_at', ascending: false)
+          .order('id', ascending: false);
+      return (res as List)
+          .map(
+            (e) => InventoryConsumptionRecordModel.fromJson(
+              Map<String, dynamic>.from(e as Map),
+            ),
+          )
+          .toList();
+    },
+  );
+
   Future<List<InventoryConsumptionRecordModel>> getBySmallItemId(
     int storageSmallItemId,
   ) async {

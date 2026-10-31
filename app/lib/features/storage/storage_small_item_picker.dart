@@ -20,6 +20,8 @@ class StorageSmallItemPicker extends StatelessWidget {
     this.addButtonLabelWhenEmpty,
     this.addButtonLabelWhenNotEmpty,
     this.subtleButton = false,
+    this.onRestock,
+    this.autoSelectCreated = true,
   });
 
   final List<StorageSmallItemOption> options;
@@ -47,6 +49,12 @@ class StorageSmallItemPicker extends StatelessWidget {
   /// 是否使用更弱提示的按钮样式（TextButton），避免与主要操作混淆
   final bool subtleButton;
 
+  /// 库存为 0 时可在当前流程中去进货。未传入时保持原有选择行为。
+  final Future<void> Function(StorageSmallItemOption option)? onRestock;
+
+  /// 消费等其他场景仍可在新建后自动选中；储值场景因新小项库存为 0 需关闭。
+  final bool autoSelectCreated;
+
   void _showPicker(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -62,6 +70,8 @@ class StorageSmallItemPicker extends StatelessWidget {
         onRemove: onRemove,
         onCreateNew: onCreateNew,
         allowCreate: allowCreate,
+        onRestock: onRestock,
+        autoSelectCreated: autoSelectCreated,
       ),
     );
   }
@@ -134,6 +144,8 @@ class _PickerSheet extends StatefulWidget {
   final void Function(int id) onRemove;
   final Future<int?> Function(String name) onCreateNew;
   final bool allowCreate;
+  final Future<void> Function(StorageSmallItemOption option)? onRestock;
+  final bool autoSelectCreated;
 
   const _PickerSheet({
     required this.options,
@@ -145,6 +157,8 @@ class _PickerSheet extends StatefulWidget {
     required this.onRemove,
     required this.onCreateNew,
     required this.allowCreate,
+    this.onRestock,
+    required this.autoSelectCreated,
   });
 
   @override
@@ -254,7 +268,9 @@ class _PickerSheetState extends State<_PickerSheet> {
                     );
                     if (name != null && name.isNotEmpty) {
                       final newId = await widget.onCreateNew(name);
-                      if (context.mounted && newId != null) {
+                      if (context.mounted &&
+                          newId != null &&
+                          widget.autoSelectCreated) {
                         setState(() => _selectedIds.add(newId));
                       }
                     }
@@ -266,6 +282,7 @@ class _PickerSheetState extends State<_PickerSheet> {
                 final selected = _selectedIds.contains(opt.id);
                 final stock = balanceMap?[opt.id];
                 final loadingCell = loadingRow;
+                final outOfStock = stock != null && stock <= 0;
                 return ListTile(
                   leading: Icon(
                     selected
@@ -287,6 +304,14 @@ class _PickerSheetState extends State<_PickerSheet> {
                             ),
                           ),
                         )
+                      : outOfStock && widget.onRestock != null
+                      ? TextButton(
+                          onPressed: () async {
+                            await widget.onRestock!(opt);
+                            if (context.mounted) setState(() {});
+                          },
+                          child: const Text('去进货'),
+                        )
                       : stock != null
                       ? Padding(
                           padding: const EdgeInsets.only(left: 8),
@@ -303,6 +328,18 @@ class _PickerSheetState extends State<_PickerSheet> {
                         )
                       : null,
                   onTap: () {
+                    if (!selected && loadingCell) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('库存正在加载，请稍候再选择')),
+                      );
+                      return;
+                    }
+                    if (!selected && outOfStock) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('当前库存为 0，请先进货再选择')),
+                      );
+                      return;
+                    }
                     setState(() {
                       if (selected) {
                         _selectedIds.remove(opt.id);

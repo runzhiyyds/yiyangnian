@@ -22,12 +22,18 @@ class InventoryPurchaseEditScreen extends StatefulWidget {
     super.key,
     this.purchaseId,
     this.initialReadOnly = false,
+    this.initialBigItemId,
+    this.initialSmallItemId,
   });
 
   final int? purchaseId;
 
   /// 已有记录默认可从只读浏览态进入，避免误触修改。
   final bool initialReadOnly;
+
+  /// 从储值页“去进货”进入时预选的大项与小项。
+  final int? initialBigItemId;
+  final int? initialSmallItemId;
 
   @override
   State<InventoryPurchaseEditScreen> createState() =>
@@ -151,13 +157,25 @@ class _InventoryPurchaseEditScreenState
 
   void _ensureInitialLine() {
     if (_lines.isNotEmpty || _bigItemOptions.isEmpty) return;
-    final bigName = _bigItemOptions.first.name;
-    final bigId = _bigItemOptions.first.id;
+    final requestedSmall = widget.initialSmallItemId == null
+        ? null
+        : _smallItemOptions
+              .where((item) => item.id == widget.initialSmallItemId)
+              .firstOrNull;
+    final requestedBigId =
+        requestedSmall?.storageBigItemId ?? widget.initialBigItemId;
+    final requestedBig = requestedBigId == null
+        ? null
+        : _bigItemOptions
+              .where((item) => item.id == requestedBigId)
+              .firstOrNull;
+    final bigName = requestedBig?.name ?? _bigItemOptions.first.name;
+    final bigId = requestedBig?.id ?? _bigItemOptions.first.id;
     final small = _smallItemOptions.where((o) => o.storageBigItemId == bigId);
     _lines.add(
       _PurchaseLineDraft(
         bigItemName: bigName,
-        smallItemId: small.isEmpty ? 0 : small.first.id,
+        smallItemId: requestedSmall?.id ?? (small.isEmpty ? 0 : small.first.id),
         quantity: 1,
       ),
     );

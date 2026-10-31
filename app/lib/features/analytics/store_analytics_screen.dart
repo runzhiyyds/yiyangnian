@@ -17,6 +17,7 @@ import '../consumption/consumption_model.dart';
 import '../consumption/consumption_repository.dart';
 import '../customer/customer_model.dart';
 import '../customer/customer_repository.dart';
+import '../inventory/inventory_consumption_repository.dart';
 import '../inventory/inventory_models.dart';
 import '../inventory/inventory_purchase_repository.dart';
 import '../storage/storage_model.dart';
@@ -50,13 +51,14 @@ class _CachedSummary {
     this.smallItemConsumptions = const {},
   });
 }
-
 /// 某周期的汇总：全部 + 按储值大项分别汇总
 class _PeriodSummaryData {
   final _CachedSummary all;
   final Map<String, _CachedSummary> byBigItem;
   /// 本周期全部进货单。进货金额按整单记录，不能可靠拆分到储值大项。
   final List<InventoryPurchaseRecordModel> purchases;
+  /// 本周期全部库存出库，用于“总进货”展开后的出库汇总。
+  final List<InventoryConsumptionRecordModel> inventoryConsumptions;
   /// 消费记录对应的储值，用于下钻展示客户名
   final Map<int, StorageRecordModel> consumptionStorageMap;
   /// 小项 ID 到名称，用于下钻展示
@@ -65,6 +67,7 @@ class _PeriodSummaryData {
     required this.all,
     required this.byBigItem,
     this.purchases = const [],
+    this.inventoryConsumptions = const [],
     this.consumptionStorageMap = const {},
     this.consumptionSmallNames = const {},
   });
@@ -125,6 +128,7 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
   final storageRepo = context.read<StorageRepository>();
   final consumptionRepo = context.read<ConsumptionRepository>();
   final purchaseRepo = context.read<InventoryPurchaseRepository>();
+  final inventoryConsumptionRepo = context.read<InventoryConsumptionRepository>();
   final bigItemRepo = context.read<StorageBigItemRepository>();
   final smallItemRepo = context.read<StorageSmallItemRepository>();
   final cache = context.read<DataCache>();
@@ -150,6 +154,7 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
       smallItemRepo.getAll(),
       storageRepo.getByStorageDateRange(weekStart, weekEnd),
       purchaseRepo.getByDateRange(weekStart, weekEnd),
+      inventoryConsumptionRepo.getByDateRange(weekStart, weekEnd),
     ]);
     final scopedCustomers = DemoMode.filterCustomers(email, initial[0] as List<CustomerModel>);
     final bigOptions = initial[1] as List<StorageBigItemOption>;
@@ -188,10 +193,16 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
       email,
       purchasesInRangeWeek,
       smallItemNames: smallIdToName,
+    ).where((record) => !record.isVoided).toList();
+    var inventoryConsumptionsInRange = initial[8] as List<InventoryConsumptionRecordModel>;
+    inventoryConsumptionsInRange = DemoMode.filterInventoryConsumptions(
+      email,
+      inventoryConsumptionsInRange,
+      smallIdToName,
     );
     final periodSummary = _buildPeriodSummaryFromConsumptions(
       weekStart, weekEnd, consumptionsWeek, storageMap, smallIdToName,
-      storagesInRangeWeek, purchasesInRangeWeek,
+      storagesInRangeWeek, purchasesInRangeWeek, inventoryConsumptionsInRange,
     );
     final periodSummaryCacheKey = _rangeCacheKey(weekStart, weekEnd);
 
@@ -278,6 +289,7 @@ _PeriodSummaryData _buildPeriodSummaryFromConsumptions(
   Map<int, String> smallIdToName,
   List<StorageRecordModel> storagesInRange,
   List<InventoryPurchaseRecordModel> purchasesInRange,
+  List<InventoryConsumptionRecordModel> inventoryConsumptionsInRange,
 ) {
   final double totalAll = storagesInRange.fold<double>(0, (sum, s) => sum + s.amount);
   final bigCountsAll = <String, int>{};
@@ -420,6 +432,7 @@ _PeriodSummaryData _buildPeriodSummaryFromConsumptions(
     all: summaryAll,
     byBigItem: byBigItem,
     purchases: purchasesInRange,
+    inventoryConsumptions: inventoryConsumptionsInRange,
     consumptionStorageMap: storageMap,
     consumptionSmallNames: smallIdToName,
   );
@@ -493,6 +506,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
   int _consumptionCount = 0;
   double _purchaseTotal = 0;
   List<InventoryPurchaseRecordModel> _purchaseRecords = [];
+  List<InventoryConsumptionRecordModel> _inventoryOutboundRecords = [];
+  bool _purchaseSummaryExpanded = false;
   Map<String, int> _bigItemCounts = {};
   Map<String, int> _smallItemCounts = {};
   bool _analyticsLoading = false;
@@ -600,6 +615,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     _consumptionTotal = summary.total;
     _consumptionCount = summary.count;
     _purchaseRecords = List.from(data.purchases);
+    _inventoryOutboundRecords = List.from(data.inventoryConsumptions);
     _purchaseTotal = _purchaseRecords.fold<double>(
       0,
       (sum, purchase) => sum + purchase.totalAmount,
@@ -641,6 +657,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     final storageRepo = context.read<StorageRepository>();
     final smallItemRepo = context.read<StorageSmallItemRepository>();
     final purchaseRepo = context.read<InventoryPurchaseRepository>();
+    final inventoryConsumptionRepo = context.read<InventoryConsumptionRepository>();
 
     try {
       var consumptions = await consumptionRepo.getByDateRange(start, end);
@@ -659,14 +676,26 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           (_, s) => !DemoMode.includeForUser(email, DemoMode.isDemoStorage(s)));
       smallIdToName = DemoMode.filterSmallItemNames(email, smallIdToName);
 
-      // 储值金额按「储值时间在本周期内」的储值记录统计
-      var storagesInRange = await storageRepo.getByStorageDateRange(start, end);
+      // 储值金额、进货和出库共用同一筛选范围，并行读取减少等待。
+      final rangeData = await Future.wait<dynamic>([
+        storageRepo.getByStorageDateRange(start, end),
+        purchaseRepo.getByDateRange(start, end),
+        inventoryConsumptionRepo.getByDateRange(start, end),
+      ]);
+      var storagesInRange = rangeData[0] as List<StorageRecordModel>;
       storagesInRange = DemoMode.filterStorages(email, storagesInRange);
-      var purchasesInRange = await purchaseRepo.getByDateRange(start, end);
+      var purchasesInRange = rangeData[1] as List<InventoryPurchaseRecordModel>;
       purchasesInRange = DemoMode.filterInventoryPurchases(
         email,
         purchasesInRange,
         smallItemNames: smallIdToName,
+      ).where((record) => !record.isVoided).toList();
+      var inventoryConsumptionsInRange =
+          rangeData[2] as List<InventoryConsumptionRecordModel>;
+      inventoryConsumptionsInRange = DemoMode.filterInventoryConsumptions(
+        email,
+        inventoryConsumptionsInRange,
+        smallIdToName,
       );
       final double totalAll = storagesInRange.fold<double>(0, (sum, s) => sum + s.amount);
 
@@ -815,6 +844,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           all: summaryAll,
           byBigItem: byBigItem,
           purchases: purchasesInRange,
+          inventoryConsumptions: inventoryConsumptionsInRange,
           consumptionStorageMap: storageMap,
           consumptionSmallNames: smallIdToName,
         );
@@ -1001,6 +1031,33 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         _returningFromDrillDown = false;
       }
     });
+  }
+
+  Map<String, int> get _inventoryOutboundSummary {
+    final totals = <String, int>{};
+    for (final record in _inventoryOutboundRecords) {
+      if (record.isVoided) continue;
+      final name = _consumptionSmallNames[record.storageSmallItemId] ??
+          '已删除小项 #${record.storageSmallItemId}';
+      totals.update(name, (value) => value + record.quantity,
+          ifAbsent: () => record.quantity);
+    }
+    return Map.fromEntries(totals.entries.toList()..sort((a, b) {
+      final byQuantity = b.value.compareTo(a.value);
+      return byQuantity != 0 ? byQuantity : a.key.compareTo(b.key);
+    }));
+  }
+
+  Future<void> _openInlinePurchase(InventoryPurchaseRecordModel purchase) async {
+    _returningFromDrillDown = true;
+    final changed = await context.push<bool>('/inventory/purchase/${purchase.id}');
+    if (!mounted) return;
+    _returningFromDrillDown = false;
+    if (changed == true) {
+      _pendingRefreshFromNotify = false;
+      _summaryCache.remove(_rangeCacheKey(_analyticsRangeStart, _analyticsRangeEnd));
+      await _loadConsumptionAnalytics();
+    }
   }
 
   void _showConsumptionDrillDown(
@@ -1740,54 +1797,92 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
             ),
             const SizedBox(height: 16),
             Card(
-              child: InkWell(
-                onTap: _analyticsLoading || _purchaseRecords.isEmpty
-                    ? null
-                    : () => _showPurchaseDrillDown(context),
-                borderRadius: BorderRadius.circular(12),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text('总进货', style: Theme.of(context).textTheme.titleMedium),
-                          if (!_analyticsLoading && _purchaseRecords.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 8),
-                              child: Icon(
-                                Icons.arrow_forward_ios,
-                                size: 14,
+              child: ExpansionTile(
+                initiallyExpanded: _purchaseSummaryExpanded,
+                onExpansionChanged: (expanded) =>
+                    setState(() => _purchaseSummaryExpanded = expanded),
+                tilePadding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                title: Text('总进货', style: Theme.of(context).textTheme.titleMedium),
+                subtitle: _analyticsLoading
+                    ? const Padding(
+                        padding: EdgeInsets.only(top: 10),
+                        child: LinearProgressIndicator(),
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('¥${_purchaseTotal.toStringAsFixed(2)}',
+                              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
                                 color: Theme.of(context).colorScheme.secondary,
                               ),
                             ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      _analyticsLoading
-                          ? const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 16),
-                              child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))),
-                            )
-                          : Text(
-                              '¥${_purchaseTotal.toStringAsFixed(2)}',
-                              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color: Theme.of(context).colorScheme.secondary,
-                                  ),
+                            const SizedBox(height: 4),
+                            Text('${_purchaseRecords.length} 笔进货 · 点击展开本筛选周期的记录与出库汇总',
+                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                             ),
-                      if (!_analyticsLoading)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            '${_purchaseRecords.length} 笔进货 · 按进货日期统计；补充入库无金额不计入，不受储值大项筛选影响',
-                            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                          ),
+                          ],
                         ),
-                    ],
+                      ),
+                children: _analyticsLoading ? const [] : [
+                  const Divider(height: 1),
+                  const SizedBox(height: 12),
+                  Align(alignment: Alignment.centerLeft,
+                    child: Text('近期进货记录', style: Theme.of(context).textTheme.titleSmall),
                   ),
-                ),
+                  const SizedBox(height: 4),
+                  if (_purchaseRecords.isEmpty)
+                    const ListTile(contentPadding: EdgeInsets.zero, title: Text('当前筛选周期暂无进货'))
+                  else
+                    ..._purchaseRecords.take(3).map((purchase) {
+                      final date = purchase.purchaseDate;
+                      final quantity = purchase.quantities.fold<int>(0, (sum, value) => sum + value);
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: Text('${date.month}/${date.day} · ${purchase.storageBigItems.toSet().join('、')}',
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text('$quantity 件'),
+                        trailing: Text('¥${purchase.totalAmount.toStringAsFixed(2)}'),
+                        onTap: () => _openInlinePurchase(purchase),
+                      );
+                    }),
+                  if (_purchaseRecords.length > 3)
+                    Align(alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: () => _showPurchaseDrillDown(context),
+                        child: Text('查看全部 ${_purchaseRecords.length} 笔进货'),
+                      ),
+                    ),
+                  const Divider(height: 24),
+                  Align(alignment: Alignment.centerLeft,
+                    child: Text('出库汇总', style: Theme.of(context).textTheme.titleSmall),
+                  ),
+                  const SizedBox(height: 4),
+                  if (_inventoryOutboundSummary.isEmpty)
+                    const ListTile(contentPadding: EdgeInsets.zero, title: Text('当前筛选周期暂无出库'))
+                  else
+                    ..._inventoryOutboundSummary.entries.take(6).map((entry) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: Text(entry.key),
+                      trailing: Text('共出库 ${entry.value} 件'),
+                    )),
+                  if (_inventoryOutboundSummary.length > 6)
+                    Align(alignment: Alignment.centerLeft,
+                      child: Text('其余 ${_inventoryOutboundSummary.length - 6} 种小项已纳入汇总',
+                        style: Theme.of(context).textTheme.bodySmall),
+                    ),
+                  Align(alignment: Alignment.centerLeft,
+                    child: Text(
+                      '统计范围：${_analyticsRangeStart.year}/${_analyticsRangeStart.month}/${_analyticsRangeStart.day} 至 ${_analyticsRangeEnd.year}/${_analyticsRangeEnd.month}/${_analyticsRangeEnd.day}；已撤销出库不计入。',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),

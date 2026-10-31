@@ -45,8 +45,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('重新加载'), findsOneWidget);
-      final customer = find.byType(TextFormField).first;
-      expect(tester.widget<TextFormField>(customer).controller?.text, '演示-回归');
+      expect(find.text('演示-回归 · 新增储值'), findsOneWidget);
       expect(
         tester
             .widget<TextButton>(find.widgetWithText(TextButton, '保存'))
@@ -57,7 +56,7 @@ void main() {
       await tester.tap(find.text('重新加载'));
       await tester.pumpAndSettle();
       expect(find.text('重新加载'), findsNothing);
-      expect(tester.widget<TextFormField>(customer).controller?.text, '演示-回归');
+      expect(find.text('演示-回归 · 新增储值'), findsOneWidget);
       expect(writes, 0);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
