@@ -1,0 +1,17 @@
+// Rollback configuration: health checks only.
+{
+  "name": "yiyangnian-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-13",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "yiyangnian-api.pet-food-advisor.asia",
+      "custom_domain": true
+    }
+  ],
+  "observability": {
+    "enabled": false
+  },
+  "vars": {}
+}

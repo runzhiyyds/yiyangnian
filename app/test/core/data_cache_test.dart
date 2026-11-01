@@ -2,6 +2,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:yiyangnian/core/data_cache.dart';
 
 void main() {
+  test(
+    'consuming/expiring read snapshots does not invalidate pending business loads',
+    () {
+      final cache = DataCache();
+      cache.set('snapshot', 1);
+      cache.set('expired', 2, ttl: const Duration(seconds: -1));
+      final revision = cache.revision;
+      expect(cache.take<int>('snapshot'), 1);
+      expect(cache.get<int>('snapshot'), null);
+      expect(cache.get<int>('expired'), null);
+      expect(cache.revision, revision);
+      cache.remove('business');
+      expect(cache.revision, greaterThan(revision));
+    },
+  );
   group('DataCache', () {
     test('get/set/remove', () {
       final cache = DataCache();

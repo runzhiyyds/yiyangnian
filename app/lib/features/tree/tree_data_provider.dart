@@ -11,6 +11,7 @@ import '../consumption/consumption_model.dart';
 import '../consumption/consumption_repository.dart';
 import '../storage_options/storage_small_item_repository.dart';
 import '../../core/data_cache.dart';
+import '../../core/repository_read_cache.dart';
 import '../../core/demo_mode.dart';
 import '../../core/error_message.dart';
 import '../../core/retry_helper.dart';
@@ -37,37 +38,29 @@ class TreeDataProvider extends ChangeNotifier {
   Map<int, List<ConsumptionRecordModel>> consumptionsByStorage = {};
   Map<int, String> smallItemNames = {};
   bool loading = true;
+  bool hasLoaded = false;
   String? error;
 
   /// 冷启动 / Supabase 唤醒时可能较慢；首页已改为少量聚合请求，略放宽避免误报超时
   static const _loadTimeout = Duration(seconds: 45);
-  static const _cacheKeyTree = 'tree_data';
-  static const _cacheKeyTreeDemo = 'tree_data_demo';
+  int _epoch = 0;
+  bool _disposed = false;
+  Future<void>? _pending;
+  int? _pendingRevision;
 
-  String _treeCacheKey(BuildContext context) {
-    final email = context.read<AuthService>().user?.email;
-    return DemoMode.isDemoScope(email)
-        ? _cacheKeyTreeDemo
-        : '${_cacheKeyTree}_${DemoMode.cacheSuffix(email)}';
-  }
-
-  void _applyAccountScopeIfNeeded(BuildContext context) {
-    final email = context.read<AuthService>().user?.email;
-    final filtered = DemoMode.filterTreeScope(
-      email: email,
-      customers: customers,
-      storagesByCustomer: storagesByCustomer,
-      consumptionsByStorage: consumptionsByStorage,
-      smallItemNames: smallItemNames,
-    );
-    customers = filtered.customers;
-    storagesByCustomer = filtered.storagesByCustomer;
-    consumptionsByStorage = filtered.consumptionsByStorage;
-    smallItemNames = filtered.smallItemNames;
+  void _apply(_TreeCacheData data) {
+    hasLoaded = true;
+    customers = data.customers;
+    storagesByCustomer = data.storagesByCustomer;
+    consumptionsByStorage = data.consumptionsByStorage;
+    smallItemNames = data.smallItemNames;
   }
 
   /// 切换账号时清空内存状态，避免短暂展示上一账号数据。
   void reset() {
+    _epoch++;
+    _pending = null;
+    hasLoaded = false;
     customers = [];
     storagesByCustomer = {};
     consumptionsByStorage = {};
@@ -77,71 +70,86 @@ class TreeDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool _loadInProgress = false;
-  Completer<void>? _loadCompleter;
-
-  Future<void> load(BuildContext context, {bool forceRefresh = false}) async {
+  Future<void> load(
+    BuildContext context, {
+    bool forceRefresh = false,
+    bool invalidateReads = true,
+  }) {
+    final auth = context.read<AuthService>();
+    final owner = auth.user?.id;
+    final email = auth.user?.email;
+    if (owner == null) return Future.value();
     final cache = context.read<DataCache>();
-    final cacheKey = _treeCacheKey(context);
+    final key = 'tree_data_$owner';
     if (!forceRefresh) {
-      final cached = cache.get<_TreeCacheData>(cacheKey);
+      final cached = cache.get<_TreeCacheData>(key);
       if (cached != null) {
-        customers = cached.customers;
-        storagesByCustomer = cached.storagesByCustomer;
-        consumptionsByStorage = cached.consumptionsByStorage;
-        smallItemNames = cached.smallItemNames;
+        _apply(cached);
         loading = false;
         error = null;
         notifyListeners();
-        return;
+        return Future.value();
       }
+      if (_pending != null && _pendingRevision == cache.revision)
+        return _pending!;
+    } else if (invalidateReads) {
+      context.read<RepositoryReadCache?>()?.clear();
     }
-
-    if (_loadInProgress) {
-      await _loadCompleter?.future;
-      return;
-    }
-    _loadInProgress = true;
-    _loadCompleter = Completer<void>();
+    final epoch = ++_epoch;
+    final revision = cache.revision;
+    bool current() => !_disposed && epoch == _epoch && auth.user?.id == owner;
     loading = true;
     error = null;
     notifyListeners();
-
-    try {
-      await _loadInternal(context).timeout(
-        _loadTimeout,
-        onTimeout: () => throw TimeoutException('加载超时，请检查网络后重试'),
-      );
-      _applyAccountScopeIfNeeded(context);
-      cache.set(
-        cacheKey,
-        _TreeCacheData(
-          customers: customers,
-          storagesByCustomer: storagesByCustomer,
-          consumptionsByStorage: consumptionsByStorage,
-          smallItemNames: smallItemNames,
-        ),
-      );
-      loading = false;
-      error = null;
-    } catch (e) {
-      loading = false;
-      error = toUserFriendlyError(e);
-    } finally {
-      _loadInProgress = false;
-      _loadCompleter?.complete();
-      _loadCompleter = null;
-    }
-    notifyListeners();
+    final request = _loadInternal(context);
+    final pending = () async {
+      try {
+        final data = await request.timeout(_loadTimeout);
+        if (!current() || cache.revision != revision) return;
+        final scoped = DemoMode.filterTreeScope(
+          email: email,
+          customers: data.customers,
+          storagesByCustomer: data.storagesByCustomer,
+          consumptionsByStorage: data.consumptionsByStorage,
+          smallItemNames: data.smallItemNames,
+        );
+        final result = _TreeCacheData(
+          customers: scoped.customers,
+          storagesByCustomer: scoped.storagesByCustomer,
+          consumptionsByStorage: scoped.consumptionsByStorage,
+          smallItemNames: scoped.smallItemNames,
+        );
+        _apply(result);
+        cache.set(key, result, ttl: const Duration(seconds: 30));
+      } catch (e) {
+        if (current()) error = toUserFriendlyError(e);
+      } finally {
+        if (current()) {
+          loading = false;
+          _pending = null;
+          notifyListeners();
+        }
+      }
+    }();
+    _pendingRevision = revision;
+    _pending = pending;
+    return pending;
   }
 
-  Future<void> _loadInternal(BuildContext context) async {
+  @override
+  void dispose() {
+    _disposed = true;
+    _epoch++;
+    super.dispose();
+  }
+
+  Future<_TreeCacheData> _loadInternal(BuildContext context) async {
     final customerRepo = context.read<CustomerRepository>();
     final storageRepo = context.read<StorageRepository>();
     final consumptionRepo = context.read<ConsumptionRepository>();
     final smallItemRepo = context.read<StorageSmallItemRepository>();
 
-    await retryOnFailure(() async {
+    return retryOnFailure(() async {
       final batch = await Future.wait([
         customerRepo.getAll(),
         storageRepo.getAll(),
@@ -165,10 +173,13 @@ class TreeDataProvider extends ChangeNotifier {
         for (final s in allStorages) s.id: [],
       };
       if (allStorages.isNotEmpty) {
-        final allConsumptions =
-            await consumptionRepo.getByStorageIds(allStorages.map((s) => s.id));
+        final allConsumptions = await consumptionRepo.getByStorageIds(
+          allStorages.map((s) => s.id),
+        );
         for (final c in allConsumptions) {
-          consumptionsByStorageMap.putIfAbsent(c.storageRecordId, () => []).add(c);
+          consumptionsByStorageMap
+              .putIfAbsent(c.storageRecordId, () => [])
+              .add(c);
         }
         for (final list in consumptionsByStorageMap.values) {
           list.sort((a, b) => b.consumptionDate.compareTo(a.consumptionDate));
@@ -177,10 +188,12 @@ class TreeDataProvider extends ChangeNotifier {
 
       final nameMap = {for (var o in options) o.id: o.name};
 
-      customers = customersList;
-      storagesByCustomer = storagesByCustomerMap;
-      consumptionsByStorage = consumptionsByStorageMap;
-      smallItemNames = nameMap;
+      return _TreeCacheData(
+        customers: customersList,
+        storagesByCustomer: storagesByCustomerMap,
+        consumptionsByStorage: consumptionsByStorageMap,
+        smallItemNames: nameMap,
+      );
     });
   }
 }

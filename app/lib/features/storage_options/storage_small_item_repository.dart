@@ -1,8 +1,11 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/repository_read_cache.dart';
+
 class StorageSmallItemOption {
   final int id;
   final String name;
+
   /// 归属的大项 ID，null 表示未归类
   final int? storageBigItemId;
 
@@ -21,27 +24,38 @@ class StorageSmallItemOption {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'storage_big_item_id': storageBigItemId,
-      };
+    'id': id,
+    'name': name,
+    'storage_big_item_id': storageBigItemId,
+  };
 }
 
 class StorageSmallItemRepository {
-  StorageSmallItemRepository(this._client);
+  StorageSmallItemRepository(this._client, {RepositoryReadCache? readCache})
+    : _readCache = readCache;
 
   final SupabaseClient _client;
+  final RepositoryReadCache? _readCache;
 
-  Future<List<StorageSmallItemOption>> getAll() async {
-    final res = await _client
-        .from('storage_small_item_options')
-        .select()
-        .order('name');
-    return (res as List)
-        .map((e) =>
-            StorageSmallItemOption.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList();
-  }
+  Future<List<T>> _read<T>(String key, Future<List<T>> Function() load) =>
+      _readCache?.read<T>(key, load) ?? load();
+
+  Future<List<StorageSmallItemOption>> getAll() => _read(
+    'StorageSmallItemRepository.getAll',
+    () async {
+      final res = await _client
+          .from('storage_small_item_options')
+          .select()
+          .order('name');
+      return (res as List)
+          .map(
+            (e) => StorageSmallItemOption.fromJson(
+              Map<String, dynamic>.from(e as Map),
+            ),
+          )
+          .toList();
+    },
+  );
 
   /// 按大项 ID 筛选小项；bigItemId 为 null 时返回未归类（storage_big_item_id 为 null）的小项
   Future<List<StorageSmallItemOption>> getByBigItemId(int? bigItemId) async {
@@ -62,59 +76,88 @@ class StorageSmallItemRepository {
         .ilike('name', '%$query%')
         .order('name');
     return (res as List)
-        .map((e) =>
-            StorageSmallItemOption.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => StorageSmallItemOption.fromJson(
+            Map<String, dynamic>.from(e as Map),
+          ),
+        )
         .toList();
   }
 
-  Future<StorageSmallItemOption> update(int id, String name, {int? storageBigItemId}) async {
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) throw ArgumentError('储值小项名称不能为空');
-    final data = <String, dynamic>{'name': trimmed};
-    if (storageBigItemId != null) {
-      data['storage_big_item_id'] = storageBigItemId;
+  Future<StorageSmallItemOption> update(
+    int id,
+    String name, {
+    int? storageBigItemId,
+  }) async {
+    try {
+      final trimmed = name.trim();
+      if (trimmed.isEmpty) throw ArgumentError('储值小项名称不能为空');
+      final data = <String, dynamic>{'name': trimmed};
+      if (storageBigItemId != null) {
+        data['storage_big_item_id'] = storageBigItemId;
+      }
+      final res = await _client
+          .from('storage_small_item_options')
+          .update(data)
+          .eq('id', id)
+          .select()
+          .single();
+      return StorageSmallItemOption.fromJson(
+        Map<String, dynamic>.from(res as Map),
+      );
+    } finally {
+      _readCache?.clear();
     }
-    final res = await _client
-        .from('storage_small_item_options')
-        .update(data)
-        .eq('id', id)
-        .select()
-        .single();
-    return StorageSmallItemOption.fromJson(Map<String, dynamic>.from(res as Map));
   }
 
   /// 仅更新小项归属的大项
   Future<StorageSmallItemOption> updateBigItem(int id, int? bigItemId) async {
-    final res = await _client
-        .from('storage_small_item_options')
-        .update({'storage_big_item_id': bigItemId})
-        .eq('id', id)
-        .select()
-        .single();
-    return StorageSmallItemOption.fromJson(Map<String, dynamic>.from(res as Map));
+    try {
+      final res = await _client
+          .from('storage_small_item_options')
+          .update({'storage_big_item_id': bigItemId})
+          .eq('id', id)
+          .select()
+          .single();
+      return StorageSmallItemOption.fromJson(
+        Map<String, dynamic>.from(res as Map),
+      );
+    } finally {
+      _readCache?.clear();
+    }
   }
 
-  Future<StorageSmallItemOption> getOrCreate(String name, {int? storageBigItemId}) async {
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) throw ArgumentError('储值小项名称不能为空');
-    final existing = await _client
-        .from('storage_small_item_options')
-        .select()
-        .eq('name', trimmed)
-        .maybeSingle();
-    if (existing != null) {
+  Future<StorageSmallItemOption> getOrCreate(
+    String name, {
+    int? storageBigItemId,
+  }) async {
+    try {
+      final trimmed = name.trim();
+      if (trimmed.isEmpty) throw ArgumentError('储值小项名称不能为空');
+      final existing = await _client
+          .from('storage_small_item_options')
+          .select()
+          .eq('name', trimmed)
+          .maybeSingle();
+      if (existing != null) {
+        return StorageSmallItemOption.fromJson(
+          Map<String, dynamic>.from(existing as Map),
+        );
+      }
+      final data = <String, dynamic>{'name': trimmed};
+      if (storageBigItemId != null) {
+        data['storage_big_item_id'] = storageBigItemId;
+      }
+      final res = await _client
+          .from('storage_small_item_options')
+          .insert(data)
+          .select()
+          .single();
       return StorageSmallItemOption.fromJson(
-          Map<String, dynamic>.from(existing as Map));
+        Map<String, dynamic>.from(res as Map),
+      );
+    } finally {
+      _readCache?.clear();
     }
-    final data = <String, dynamic>{'name': trimmed};
-    if (storageBigItemId != null) {
-      data['storage_big_item_id'] = storageBigItemId;
-    }
-    final res = await _client
-        .from('storage_small_item_options')
-        .insert(data)
-        .select()
-        .single();
-    return StorageSmallItemOption.fromJson(Map<String, dynamic>.from(res as Map));
   }
 }

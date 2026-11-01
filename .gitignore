@@ -15,3 +15,7 @@ pgyer_config.sh
 **/ios/Flutter/.last_build_id
 **/linux/flutter/ephemeral/
 **/linux/flutter/ephemeral */
+
+# 生产业务数据备份与生成的全量导入 SQL（含客户隐私，严禁提交）
+docs/颐养年备份/
+docs/cloudbase_migrations/generated/

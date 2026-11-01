@@ -7,6 +7,7 @@ import '../../core/data_refresh.dart';
 import '../../core/error_message.dart';
 import '../../widgets/confirm_dialog.dart';
 import '../../core/retry_helper.dart';
+import '../../core/write_request_id.dart';
 import '../../widgets/loading_placeholder.dart';
 import '../../core/formula_helper.dart';
 import '../customer/customer_repository.dart';
@@ -48,6 +49,8 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
   bool _loading = true;
   String? _error;
   bool _loadInProgress = false;
+  bool _batchWriteInProgress = false;
+  String? _batchWriteRequestId;
   late final DataRefreshNotifier _refreshNotifier;
 
   String get _title {
@@ -56,7 +59,9 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
     final smallStr = s.storageSmallItemIds
         .map((id) => _smallItemNames[id] ?? id.toString())
         .join('、');
-    return smallStr.isNotEmpty ? '${s.customerName} · $smallStr' : s.customerName;
+    return smallStr.isNotEmpty
+        ? '${s.customerName} · $smallStr'
+        : s.customerName;
   }
 
   @override
@@ -83,6 +88,8 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
     if (!mounted) return;
     final id = widget.storageId;
     final cache = context.read<DataCache>();
+    final revision = cache.revision;
+    bool current() => mounted && cache.revision == revision;
     final cached = cache.get<_StorageDetailCache>(_cacheKey(id));
     if (cached != null) {
       setState(() {
@@ -108,23 +115,25 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
     });
 
     try {
-      final results = await retryOnFailure(() => Future.wait([
-        storageRepo.getById(id),
-        consumptionRepo.getByStorage(id),
-        storageRepo.getRemainingCount(id),
-        smallItemRepo.getAll(),
-      ]));
+      final results = await retryOnFailure(
+        () => Future.wait([
+          storageRepo.getById(id),
+          consumptionRepo.getByStorage(id),
+          smallItemRepo.getAll(),
+        ]),
+      );
+      if (!current()) return;
       final storage = results[0] as StorageRecordModel?;
       if (storage == null) {
         if (mounted) context.pop();
         return;
       }
       final consumptions = results[1] as List<ConsumptionRecordModel>;
-      final remaining = results[2] as int;
-      final options = results[3] as List<StorageSmallItemOption>;
+      final remaining = storage.totalCount - consumptions.length;
+      final options = results[2] as List<StorageSmallItemOption>;
       final nameMap = {for (var o in options) o.id: o.name};
 
-      if (mounted) {
+      if (current()) {
         cache.set(
           _cacheKey(id),
           _StorageDetailCache(
@@ -143,7 +152,7 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (current()) {
         setState(() {
           _error = toUserFriendlyError(e);
           _loading = false;
@@ -151,6 +160,7 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       }
     } finally {
       _loadInProgress = false;
+      if (mounted && cache.revision != revision) _load();
     }
   }
 
@@ -162,7 +172,9 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
     );
     if (ok != true || !mounted) return;
     // 乐观更新：先从列表移除并更新剩余次数，再请求接口；失败时回滚
-    final previousConsumptions = List<ConsumptionRecordModel>.from(_consumptions);
+    final previousConsumptions = List<ConsumptionRecordModel>.from(
+      _consumptions,
+    );
     final previousRemaining = _remainingCount;
     setState(() {
       _consumptions = _consumptions.where((x) => x.id != c.id).toList();
@@ -267,7 +279,10 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
               _InfoRow(label: '属相', value: customer.zodiac ?? '-'),
               _InfoRow(label: '年龄', value: customer.age?.toString() ?? '-'),
               _InfoRow(label: '住址', value: customer.address ?? '-'),
-              _InfoRow(label: '生命密码', value: customer.lifeNumber?.toString() ?? '-'),
+              _InfoRow(
+                label: '生命密码',
+                value: customer.lifeNumber?.toString() ?? '-',
+              ),
               _InfoRow(label: '症状', value: customer.symptoms ?? '-'),
               const SizedBox(height: 24),
               SizedBox(
@@ -298,17 +313,17 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       options = await retryOnFailure(() => bigRepo.getAll());
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(toUserFriendlyError(e))),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(toUserFriendlyError(e))));
       }
       return;
     }
     if (!mounted) return;
     if (options.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('暂无大项选项，请先在储值/库存管理中维护。')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('暂无大项选项，请先在储值/库存管理中维护。')));
       return;
     }
 
@@ -344,7 +359,10 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, selectedId),
               child: const Text('确定'),
@@ -362,17 +380,19 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       }
     }
     if (bigName == null) return;
-    await _updateStorage(StorageRecordModel(
-      id: s.id,
-      code: s.code,
-      customerName: s.customerName,
-      storageBigItems: [bigName],
-      storageSmallItemIds: s.storageSmallItemIds,
-      amount: s.amount,
-      totalCount: s.totalCount,
-      storageDate: s.storageDate,
-      remark: s.remark,
-    ));
+    await _updateStorage(
+      StorageRecordModel(
+        id: s.id,
+        code: s.code,
+        customerName: s.customerName,
+        storageBigItems: [bigName],
+        storageSmallItemIds: s.storageSmallItemIds,
+        amount: s.amount,
+        totalCount: s.totalCount,
+        storageDate: s.storageDate,
+        remark: s.remark,
+      ),
+    );
   }
 
   Future<void> _editSmallItems() async {
@@ -390,7 +410,12 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
         builder: (ctx, setDialogState) {
           final filtered = search.isEmpty
               ? optionsList
-              : optionsList.where((o) => o.name.toLowerCase().contains(search.toLowerCase())).toList();
+              : optionsList
+                    .where(
+                      (o) =>
+                          o.name.toLowerCase().contains(search.toLowerCase()),
+                    )
+                    .toList();
           return AlertDialog(
             title: const Text('编辑储值小项'),
             content: SingleChildScrollView(
@@ -400,9 +425,7 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
                 children: [
                   TextField(
                     controller: controller,
-                    decoration: const InputDecoration(
-                      hintText: '输入搜索',
-                    ),
+                    decoration: const InputDecoration(hintText: '输入搜索'),
                     onChanged: (v) => setDialogState(() => search = v),
                   ),
                   const SizedBox(height: 12),
@@ -413,15 +436,20 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
                       value: sel,
                       onChanged: (v) {
                         setDialogState(() {
-                          if (v == true) selectedIds.add(opt.id);
-                          else selectedIds.remove(opt.id);
+                          if (v == true)
+                            selectedIds.add(opt.id);
+                          else
+                            selectedIds.remove(opt.id);
                         });
                       },
                     );
                   }),
                   ListTile(
                     leading: const Icon(Icons.add_circle_outline),
-                    title: const Text('创建选项', style: TextStyle(color: Colors.blue)),
+                    title: const Text(
+                      '创建选项',
+                      style: TextStyle(color: Colors.blue),
+                    ),
                     onTap: () async {
                       final name = await showDialog<String>(
                         context: ctx,
@@ -431,13 +459,19 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
                             title: const Text('新建储值小项'),
                             content: TextField(
                               controller: tc,
-                              decoration: const InputDecoration(labelText: '名称'),
+                              decoration: const InputDecoration(
+                                labelText: '名称',
+                              ),
                               autofocus: true,
                             ),
                             actions: [
-                              TextButton(onPressed: () => Navigator.pop(c), child: const Text('取消')),
+                              TextButton(
+                                onPressed: () => Navigator.pop(c),
+                                child: const Text('取消'),
+                              ),
                               FilledButton(
-                                onPressed: () => Navigator.pop(c, tc.text.trim()),
+                                onPressed: () =>
+                                    Navigator.pop(c, tc.text.trim()),
                                 child: const Text('确定'),
                               ),
                             ],
@@ -457,7 +491,10 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('取消'),
+              ),
               FilledButton(
                 onPressed: () => Navigator.pop(ctx, selectedIds),
                 child: const Text('确定'),
@@ -468,17 +505,19 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       ),
     );
     if (result != null && mounted) {
-      await _updateStorage(StorageRecordModel(
-        id: s.id,
-        code: s.code,
-        customerName: s.customerName,
-        storageBigItems: s.storageBigItems,
-        storageSmallItemIds: result,
-        amount: s.amount,
-        totalCount: s.totalCount,
-        storageDate: s.storageDate,
-        remark: s.remark,
-      ));
+      await _updateStorage(
+        StorageRecordModel(
+          id: s.id,
+          code: s.code,
+          customerName: s.customerName,
+          storageBigItems: s.storageBigItems,
+          storageSmallItemIds: result,
+          amount: s.amount,
+          totalCount: s.totalCount,
+          storageDate: s.storageDate,
+          remark: s.remark,
+        ),
+      );
     }
   }
 
@@ -500,10 +539,15 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
           autofocus: true,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () {
-              final v = double.tryParse(controller.text) ?? tryParseFormula(controller.text);
+              final v =
+                  double.tryParse(controller.text) ??
+                  tryParseFormula(controller.text);
               if (v != null && v >= 0) Navigator.pop(ctx, v);
             },
             child: const Text('确定'),
@@ -512,17 +556,19 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       ),
     );
     if (result != null && mounted) {
-      await _updateStorage(StorageRecordModel(
-        id: s.id,
-        code: s.code,
-        customerName: s.customerName,
-        storageBigItems: s.storageBigItems,
-        storageSmallItemIds: s.storageSmallItemIds,
-        amount: result,
-        totalCount: s.totalCount,
-        storageDate: s.storageDate,
-        remark: s.remark,
-      ));
+      await _updateStorage(
+        StorageRecordModel(
+          id: s.id,
+          code: s.code,
+          customerName: s.customerName,
+          storageBigItems: s.storageBigItems,
+          storageSmallItemIds: s.storageSmallItemIds,
+          amount: result,
+          totalCount: s.totalCount,
+          storageDate: s.storageDate,
+          remark: s.remark,
+        ),
+      );
     }
   }
 
@@ -541,7 +587,10 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
           autofocus: true,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () {
               final v = int.tryParse(controller.text);
@@ -553,17 +602,19 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       ),
     );
     if (result != null && mounted) {
-      await _updateStorage(StorageRecordModel(
-        id: s.id,
-        code: s.code,
-        customerName: s.customerName,
-        storageBigItems: s.storageBigItems,
-        storageSmallItemIds: s.storageSmallItemIds,
-        amount: s.amount,
-        totalCount: result,
-        storageDate: s.storageDate,
-        remark: s.remark,
-      ));
+      await _updateStorage(
+        StorageRecordModel(
+          id: s.id,
+          code: s.code,
+          customerName: s.customerName,
+          storageBigItems: s.storageBigItems,
+          storageSmallItemIds: s.storageSmallItemIds,
+          amount: s.amount,
+          totalCount: result,
+          storageDate: s.storageDate,
+          remark: s.remark,
+        ),
+      );
     }
   }
 
@@ -578,17 +629,19 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       locale: const Locale('zh', 'CN'),
     );
     if (d != null && mounted) {
-      await _updateStorage(StorageRecordModel(
-        id: s.id,
-        code: s.code,
-        customerName: s.customerName,
-        storageBigItems: s.storageBigItems,
-        storageSmallItemIds: s.storageSmallItemIds,
-        amount: s.amount,
-        totalCount: s.totalCount,
-        storageDate: d,
-        remark: s.remark,
-      ));
+      await _updateStorage(
+        StorageRecordModel(
+          id: s.id,
+          code: s.code,
+          customerName: s.customerName,
+          storageBigItems: s.storageBigItems,
+          storageSmallItemIds: s.storageSmallItemIds,
+          amount: s.amount,
+          totalCount: s.totalCount,
+          storageDate: d,
+          remark: s.remark,
+        ),
+      );
     }
   }
 
@@ -602,14 +655,15 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
         title: const Text('编辑备注'),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            hintText: '请输入备注信息',
-          ),
+          decoration: const InputDecoration(hintText: '请输入备注信息'),
           maxLines: 3,
           autofocus: true,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
             child: const Text('确定'),
@@ -618,22 +672,24 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
       ),
     );
     if (result != null && mounted) {
-      await _updateStorage(StorageRecordModel(
-        id: s.id,
-        code: s.code,
-        customerName: s.customerName,
-        storageBigItems: s.storageBigItems,
-        storageSmallItemIds: s.storageSmallItemIds,
-        amount: s.amount,
-        totalCount: s.totalCount,
-        storageDate: s.storageDate,
-        remark: result.isEmpty ? null : result,
-      ));
+      await _updateStorage(
+        StorageRecordModel(
+          id: s.id,
+          code: s.code,
+          customerName: s.customerName,
+          storageBigItems: s.storageBigItems,
+          storageSmallItemIds: s.storageSmallItemIds,
+          amount: s.amount,
+          totalCount: s.totalCount,
+          storageDate: s.storageDate,
+          remark: result.isEmpty ? null : result,
+        ),
+      );
     }
   }
 
   Future<void> _batchAddConsumption() async {
-    if (_storage == null) return;
+    if (_storage == null || _batchWriteInProgress) return;
     final n = await showDialog<int>(
       context: context,
       builder: (ctx) {
@@ -652,9 +708,7 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
               TextField(
                 controller: controller,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: '新增条数',
-                ),
+                decoration: const InputDecoration(labelText: '新增条数'),
               ),
             ],
           ),
@@ -681,9 +735,7 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
     if (_remainingCount < n) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(
-                  '剩余消费次数不足，当前剩余 $_remainingCount 次')),
+          SnackBar(content: Text('剩余消费次数不足，当前剩余 $_remainingCount 次')),
         );
       }
       return;
@@ -691,26 +743,41 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
 
     final consumptionRepo = context.read<ConsumptionRepository>();
     final smallItemIds = _storage!.storageSmallItemIds;
-    final projectId =
-        smallItemIds.isNotEmpty ? smallItemIds.first : null;
+    final projectId = smallItemIds.isNotEmpty ? smallItemIds.first : null;
 
-    for (var i = 0; i < n; i++) {
-      await consumptionRepo.create(ConsumptionRecordModel(
-        id: 0,
-        code: '',
-        consumptionDate: DateTime.now(),
-        storageRecordId: widget.storageId,
-        consumptionProjectId: projectId,
-        consumptionProjectIds: projectId != null ? [projectId] : const [],
-      ));
-    }
+    _batchWriteInProgress = true;
+    final requestId = _batchWriteRequestId ??= newWriteRequestId();
+    try {
+      for (var i = 0; i < n; i++) {
+        await consumptionRepo.create(
+          ConsumptionRecordModel(
+            id: 0,
+            code: '',
+            consumptionDate: DateTime.now(),
+            storageRecordId: widget.storageId,
+            consumptionProjectId: projectId,
+            consumptionProjectIds: projectId != null ? [projectId] : const [],
+            clientRequestId: childWriteRequestId(requestId, i),
+          ),
+        );
+      }
 
-    if (mounted) {
-      context.read<DataRefreshNotifier>().invalidateStorageAndConsumption();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已新增 $n 条消费记录')),
-      );
-      _load();
+      _batchWriteRequestId = null;
+      if (mounted) {
+        context.read<DataRefreshNotifier>().invalidateStorageAndConsumption();
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('已新增 $n 条消费记录')));
+        _load();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(toUserFriendlyError(e))));
+      }
+    } finally {
+      _batchWriteInProgress = false;
     }
   }
 
@@ -732,10 +799,7 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
               if (_error != null)
                 Text(_error!, style: const TextStyle(color: Colors.red)),
               const SizedBox(height: 16),
-              FilledButton(
-                onPressed: _load,
-                child: const Text('重试'),
-              ),
+              FilledButton(onPressed: _load, child: const Text('重试')),
             ],
           ),
         ),
@@ -746,7 +810,8 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
     final smallItemStr = s.storageSmallItemIds
         .map((id) => _smallItemNames[id] ?? id.toString())
         .join('、');
-    final dateStr = '${s.storageDate.year}-${s.storageDate.month.toString().padLeft(2, '0')}-${s.storageDate.day.toString().padLeft(2, '0')}';
+    final dateStr =
+        '${s.storageDate.year}-${s.storageDate.month.toString().padLeft(2, '0')}-${s.storageDate.day.toString().padLeft(2, '0')}';
 
     return Scaffold(
       appBar: AppBar(
@@ -805,11 +870,7 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
                       value: dateStr,
                       onTap: _editStorageDate,
                     ),
-                    _EditableField(
-                      label: '储值编号',
-                      value: s.code,
-                      onTap: null,
-                    ),
+                    _EditableField(label: '储值编号', value: s.code, onTap: null),
                     _EditableField(
                       label: '备注',
                       value: (s.remark ?? '').isEmpty ? '-' : s.remark!,
@@ -829,25 +890,24 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
                   if (_remainingCount <= 0) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(
-                          '剩余消费次数不足，当前剩余 $_remainingCount 次',
-                        ),
+                        content: Text('剩余消费次数不足，当前剩余 $_remainingCount 次'),
                       ),
                     );
                     return;
                   }
-                  final result = await showModalBottomSheet<List<ConsumptionRecordModel>>(
-                    context: context,
-                    isScrollControlled: true,
-                    useSafeArea: true,
-                    builder: (ctx) => FractionallySizedBox(
-                      heightFactor: 0.9,
-                      child: ConsumptionMultiAddSheet(
-                        storage: s,
-                        remainingCount: _remainingCount,
-                      ),
-                    ),
-                  );
+                  final result =
+                      await showModalBottomSheet<List<ConsumptionRecordModel>>(
+                        context: context,
+                        isScrollControlled: true,
+                        useSafeArea: true,
+                        builder: (ctx) => FractionallySizedBox(
+                          heightFactor: 0.9,
+                          child: ConsumptionMultiAddSheet(
+                            storage: s,
+                            remainingCount: _remainingCount,
+                          ),
+                        ),
+                      );
                   if (mounted && result != null && result.isNotEmpty) {
                     setState(() {
                       _consumptions = [...result, ..._consumptions];
@@ -867,13 +927,17 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
               ),
             ),
             const SizedBox(height: 24),
-            Text('消费记录 (${_consumptions.length})',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              '消费记录 (${_consumptions.length})',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 8),
             ..._consumptions.map((c) {
               final ids = c.consumptionProjectIds.isNotEmpty
                   ? c.consumptionProjectIds
-                  : (c.consumptionProjectId != null ? [c.consumptionProjectId!] : <int>[]);
+                  : (c.consumptionProjectId != null
+                        ? [c.consumptionProjectId!]
+                        : <int>[]);
               final names = ids
                   .map((id) => _smallItemNames[id] ?? '')
                   .where((n) => n.isNotEmpty)
@@ -906,7 +970,9 @@ class _StorageDetailScreenState extends State<StorageDetailScreen> {
                       onPressed: () async {
                         await context.push('/consumption/${c.id}/edit');
                         if (mounted) {
-                          context.read<DataRefreshNotifier>().invalidateStorageAndConsumption();
+                          context
+                              .read<DataRefreshNotifier>()
+                              .invalidateStorageAndConsumption();
                           _load();
                         }
                       },
@@ -965,11 +1031,7 @@ class _EditableField extends StatelessWidget {
   final String value;
   final VoidCallback? onTap;
 
-  const _EditableField({
-    required this.label,
-    required this.value,
-    this.onTap,
-  });
+  const _EditableField({required this.label, required this.value, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -989,12 +1051,7 @@ class _EditableField extends StatelessWidget {
               ),
             ),
           ),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(fontSize: 15),
-            ),
-          ),
+          Expanded(child: Text(value, style: const TextStyle(fontSize: 15))),
           if (onTap != null)
             Icon(Icons.edit, size: 16, color: Colors.grey[600]),
         ],

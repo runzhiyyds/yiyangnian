@@ -4,6 +4,7 @@ import 'package:lunar/lunar.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/data_cache.dart';
+import '../../core/repository_read_cache.dart';
 import '../../core/data_refresh.dart';
 import '../../core/date_range_helper.dart';
 import '../../core/demo_mode.dart';
@@ -16,6 +17,9 @@ import '../consumption/consumption_model.dart';
 import '../consumption/consumption_repository.dart';
 import '../customer/customer_model.dart';
 import '../customer/customer_repository.dart';
+import '../inventory/inventory_consumption_repository.dart';
+import '../inventory/inventory_models.dart';
+import '../inventory/inventory_purchase_repository.dart';
 import '../storage/storage_model.dart';
 import '../storage/storage_repository.dart';
 import '../storage_options/storage_big_item_repository.dart';
@@ -47,11 +51,14 @@ class _CachedSummary {
     this.smallItemConsumptions = const {},
   });
 }
-
 /// 某周期的汇总：全部 + 按储值大项分别汇总
 class _PeriodSummaryData {
   final _CachedSummary all;
   final Map<String, _CachedSummary> byBigItem;
+  /// 本周期全部进货单。进货金额按整单记录，不能可靠拆分到储值大项。
+  final List<InventoryPurchaseRecordModel> purchases;
+  /// 本周期全部库存出库，用于“总进货”展开后的出库汇总。
+  final List<InventoryConsumptionRecordModel> inventoryConsumptions;
   /// 消费记录对应的储值，用于下钻展示客户名
   final Map<int, StorageRecordModel> consumptionStorageMap;
   /// 小项 ID 到名称，用于下钻展示
@@ -59,6 +66,8 @@ class _PeriodSummaryData {
   _PeriodSummaryData({
     required this.all,
     required this.byBigItem,
+    this.purchases = const [],
+    this.inventoryConsumptions = const [],
     this.consumptionStorageMap = const {},
     this.consumptionSmallNames = const {},
   });
@@ -107,51 +116,66 @@ class _AnalyticsPreloadResult {
   final DateTime calendarSelectedMonth;
 }
 
-const String _kAnalyticsPreloadCacheKey = 'analytics_preload';
+String _analyticsPreloadKey(BuildContext context) {
+  final owner = context.read<AuthService>().user?.id;
+  final now = DateTime.now();
+  return 'analytics_preload_${owner}_${now.year}-${now.month}-${now.day}';
+}
 
-/// 供启动页调用：并行预加载首页与店铺分析数据，避免进入分析页时二次等待
+/// 首屏就绪后在后台调用；失败不阻止进入分析页。
 Future<void> preloadStoreAnalyticsData(BuildContext context) async {
   final customerRepo = context.read<CustomerRepository>();
   final storageRepo = context.read<StorageRepository>();
   final consumptionRepo = context.read<ConsumptionRepository>();
+  final purchaseRepo = context.read<InventoryPurchaseRepository>();
+  final inventoryConsumptionRepo = context.read<InventoryConsumptionRepository>();
   final bigItemRepo = context.read<StorageBigItemRepository>();
   final smallItemRepo = context.read<StorageSmallItemRepository>();
   final cache = context.read<DataCache>();
+  final auth = context.read<AuthService>();
+  final owner = auth.user?.id;
+  if (owner == null) return;
+  final email = auth.user?.email;
+  final key = _analyticsPreloadKey(context);
+  final revision = cache.revision;
 
   try {
     final (weekStart, weekEnd) = DateRangeHelper.thisWeek();
-    final monthStart = DateTime(weekStart.year, weekStart.month, 1);
+    final today = DateTime.now();
+    final monthStart = DateTime(today.year, today.month, 1);
     final monthEnd = DateTime(monthStart.year, monthStart.month + 1, 0);
 
-    final email = context.read<AuthService>().user?.email;
-    final customers = await retryOnFailure(() => customerRepo.getAll());
-    final scopedCustomers = DemoMode.filterCustomers(email, customers);
-    final bigOptions = await bigItemRepo.getAll();
+    final initial = await Future.wait<dynamic>([
+      retryOnFailure(() => customerRepo.getAll()),
+      bigItemRepo.getAll(),
+      storageRepo.getAll(),
+      consumptionRepo.getByDateRange(weekStart, weekEnd),
+      consumptionRepo.getByDateRange(monthStart, monthEnd),
+      smallItemRepo.getAll(),
+      storageRepo.getByStorageDateRange(weekStart, weekEnd),
+      purchaseRepo.getByDateRange(weekStart, weekEnd),
+      inventoryConsumptionRepo.getByDateRange(weekStart, weekEnd),
+    ]);
+    final scopedCustomers = DemoMode.filterCustomers(email, initial[0] as List<CustomerModel>);
+    final bigOptions = initial[1] as List<StorageBigItemOption>;
     final allBigItemNamesFromRepo = bigOptions.map((o) => o.name).toList();
-
-    final deposits = await Future.wait(
-      scopedCustomers.map((c) => customerRepo.getTotalDeposit(c.name)),
-    );
-    final depositByCustomer = {
-      for (var i = 0; i < scopedCustomers.length; i++)
-        scopedCustomers[i].name: deposits[i],
-    };
+    final scopedStorages = DemoMode.filterStorages(email, initial[2] as List<StorageRecordModel>);
+    final depositByCustomer = <String, double>{};
+    for (final storage in scopedStorages) {
+      depositByCustomer.update(storage.customerName, (v) => v + storage.amount,
+        ifAbsent: () => storage.amount);
+    }
     final sorted = scopedCustomers.toList()
-      ..sort((a, b) =>
-          (depositByCustomer[b.name] ?? 0).compareTo(depositByCustomer[a.name] ?? 0));
-
-    var consumptionsWeek = await consumptionRepo.getByDateRange(weekStart, weekEnd);
-    var consumptionsMonth = await consumptionRepo.getByDateRange(monthStart, monthEnd);
+      ..sort((a, b) => (depositByCustomer[b.name] ?? 0).compareTo(depositByCustomer[a.name] ?? 0));
+    var consumptionsWeek = initial[3] as List<ConsumptionRecordModel>;
+    var consumptionsMonth = initial[4] as List<ConsumptionRecordModel>;
 
     final storageIdsWeek = consumptionsWeek.map((c) => c.storageRecordId).toSet().toList();
     final storageIdsMonth = consumptionsMonth.map((c) => c.storageRecordId).toSet().toList();
     final allStorageIds = {...storageIdsWeek, ...storageIdsMonth}.toList();
-    final storageMap = <int, StorageRecordModel>{};
-    for (final id in allStorageIds) {
-      final s = await storageRepo.getById(id);
-      if (s != null) storageMap[id] = s;
-    }
-    final smallOptions = await smallItemRepo.getAll();
+    final relatedStorages = await storageRepo.getByIds(allStorageIds);
+    final storageMap = {for (final storage in relatedStorages) storage.id: storage};
+    final smallOptions = initial[5] as List<StorageSmallItemOption>;
     var smallIdToName = {for (var o in smallOptions) o.id: o.name};
 
     consumptionsWeek =
@@ -162,11 +186,23 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
         (_, s) => !DemoMode.includeForUser(email, DemoMode.isDemoStorage(s)));
     smallIdToName = DemoMode.filterSmallItemNames(email, smallIdToName);
 
-    var storagesInRangeWeek =
-        await storageRepo.getByStorageDateRange(weekStart, weekEnd);
+    var storagesInRangeWeek = initial[6] as List<StorageRecordModel>;
     storagesInRangeWeek = DemoMode.filterStorages(email, storagesInRangeWeek);
+    var purchasesInRangeWeek = initial[7] as List<InventoryPurchaseRecordModel>;
+    purchasesInRangeWeek = DemoMode.filterInventoryPurchases(
+      email,
+      purchasesInRangeWeek,
+      smallItemNames: smallIdToName,
+    ).where((record) => !record.isVoided).toList();
+    var inventoryConsumptionsInRange = initial[8] as List<InventoryConsumptionRecordModel>;
+    inventoryConsumptionsInRange = DemoMode.filterInventoryConsumptions(
+      email,
+      inventoryConsumptionsInRange,
+      smallIdToName,
+    );
     final periodSummary = _buildPeriodSummaryFromConsumptions(
-      weekStart, weekEnd, consumptionsWeek, storageMap, smallIdToName, storagesInRangeWeek,
+      weekStart, weekEnd, consumptionsWeek, storageMap, smallIdToName,
+      storagesInRangeWeek, purchasesInRangeWeek, inventoryConsumptionsInRange,
     );
     final periodSummaryCacheKey = _rangeCacheKey(weekStart, weekEnd);
 
@@ -200,8 +236,10 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
       }
     }
 
+    if (!context.mounted || auth.user?.id != owner || cache.revision != revision ||
+        _analyticsPreloadKey(context) != key) return;
     cache.set(
-      _kAnalyticsPreloadCacheKey,
+      key,
       _AnalyticsPreloadResult(
         customers: sorted,
         depositByCustomer: depositByCustomer,
@@ -216,11 +254,11 @@ Future<void> preloadStoreAnalyticsData(BuildContext context) async {
         analyticsRangeEnd: weekEnd,
         calendarSelectedMonth: monthStart,
       ),
+      ttl: const Duration(seconds: 30),
     );
   } catch (e) {
     debugPrint('preloadStoreAnalyticsData failed: $e');
-    cache.set('analytics_preload_failed', true);
-    // 预加载失败不影响进入首页，分析页进入时会提示并支持重试
+    // 进入分析页时正常加载，不把后台失败变成需要用户额外点击的错误。
   }
 }
 
@@ -250,6 +288,8 @@ _PeriodSummaryData _buildPeriodSummaryFromConsumptions(
   Map<int, StorageRecordModel> storageMap,
   Map<int, String> smallIdToName,
   List<StorageRecordModel> storagesInRange,
+  List<InventoryPurchaseRecordModel> purchasesInRange,
+  List<InventoryConsumptionRecordModel> inventoryConsumptionsInRange,
 ) {
   final double totalAll = storagesInRange.fold<double>(0, (sum, s) => sum + s.amount);
   final bigCountsAll = <String, int>{};
@@ -391,6 +431,8 @@ _PeriodSummaryData _buildPeriodSummaryFromConsumptions(
   return _PeriodSummaryData(
     all: summaryAll,
     byBigItem: byBigItem,
+    purchases: purchasesInRange,
+    inventoryConsumptions: inventoryConsumptionsInRange,
     consumptionStorageMap: storageMap,
     consumptionSmallNames: smallIdToName,
   );
@@ -438,9 +480,16 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
   Map<String, double> _depositByCustomer = {};
   List<CustomerModel> _birthdayThisWeek = [];
   List<CustomerModel> _birthdayThisMonth = [];
+  bool _hasLoaded = false;
   bool _loading = true;
   String? _error;
   bool _loadInProgress = false;
+  int _summaryLoadEpoch = 0;
+  int _calendarLoadEpoch = 0;
+  String? _analyticsError;
+  String? _calendarError;
+  String? _lastSummaryRange;
+  bool _calendarHasLoaded = false;
   bool _rankingExpanded = false;
   late final DataRefreshNotifier _refreshNotifier;
 
@@ -455,6 +504,10 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
   List<String> _allBigItemNamesFromRepo = [];
   double _consumptionTotal = 0;
   int _consumptionCount = 0;
+  double _purchaseTotal = 0;
+  List<InventoryPurchaseRecordModel> _purchaseRecords = [];
+  List<InventoryConsumptionRecordModel> _inventoryOutboundRecords = [];
+  bool _purchaseSummaryExpanded = false;
   Map<String, int> _bigItemCounts = {};
   Map<String, int> _smallItemCounts = {};
   bool _analyticsLoading = false;
@@ -483,6 +536,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
   bool _lastRouteCurrent = false;
   /// 从储值/消费详情返回时置为 true，避免被误判为「切换 TAB」而刷新导致滚动乱跳
   bool _returningFromDrillDown = false;
+  /// 正在从进货明细进入详情；返回后需要恢复明细 sheet。
+  bool _restoringPurchaseSheet = false;
   /// 在非当前页时收到 notifyDataChanged，延后到重新成为当前页或下拉刷新时再刷新
   bool _pendingRefreshFromNotify = false;
 
@@ -549,6 +604,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
   }
 
   void _applySummaryFromCache(_PeriodSummaryData data) {
+    _analyticsError = null;
+    _lastSummaryRange = '${_analyticsRangeStart.year}/${_analyticsRangeStart.month}/${_analyticsRangeStart.day} 至 ${_analyticsRangeEnd.month}/${_analyticsRangeEnd.day}';
     if (_selectedBigItemFilter != null && !data.byBigItem.containsKey(_selectedBigItemFilter)) {
       _selectedBigItemFilter = null;
     }
@@ -557,6 +614,12 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         : (data.byBigItem[_selectedBigItemFilter] ?? _CachedSummary(total: 0, count: 0, bigCounts: {}, smallCounts: {}));
     _consumptionTotal = summary.total;
     _consumptionCount = summary.count;
+    _purchaseRecords = List.from(data.purchases);
+    _inventoryOutboundRecords = List.from(data.inventoryConsumptions);
+    _purchaseTotal = _purchaseRecords.fold<double>(
+      0,
+      (sum, purchase) => sum + purchase.totalAmount,
+    );
     _bigItemCounts = Map.from(summary.bigCounts);
     _smallItemCounts = Map.from(summary.smallCounts);
     _contributingStorages = summary.contributingStorages;
@@ -571,6 +634,13 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
 
   Future<void> _loadConsumptionAnalytics() async {
     if (!mounted) return;
+    final epoch = ++_summaryLoadEpoch;
+    final auth = context.read<AuthService>();
+    final owner = auth.user?.id;
+    final cache = context.read<DataCache>();
+    final revision = cache.revision;
+    bool current() => mounted && epoch == _summaryLoadEpoch &&
+        auth.user?.id == owner && cache.revision == revision;
     final (start, end) = _normalizeRange(_analyticsRangeStart, _analyticsRangeEnd);
     final cacheKey = _rangeCacheKey(start, end);
     final cached = _summaryCache[cacheKey];
@@ -582,18 +652,20 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       return;
     }
 
+    setState(() => _analyticsLoading = true);
     final consumptionRepo = context.read<ConsumptionRepository>();
     final storageRepo = context.read<StorageRepository>();
     final smallItemRepo = context.read<StorageSmallItemRepository>();
+    final purchaseRepo = context.read<InventoryPurchaseRepository>();
+    final inventoryConsumptionRepo = context.read<InventoryConsumptionRepository>();
 
     try {
       var consumptions = await consumptionRepo.getByDateRange(start, end);
       final storageIds = consumptions.map((c) => c.storageRecordId).toSet().toList();
-      final storageMap = <int, StorageRecordModel>{};
-      for (final id in storageIds) {
-        final s = await storageRepo.getById(id);
-        if (s != null) storageMap[id] = s;
-      }
+      final relatedStorages = await storageRepo.getByIds(storageIds);
+      final storageMap = {
+        for (final storage in relatedStorages) storage.id: storage,
+      };
       final smallOptions = await smallItemRepo.getAll();
       var smallIdToName = {for (var o in smallOptions) o.id: o.name};
       final email = context.read<AuthService>().user?.email;
@@ -604,9 +676,27 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           (_, s) => !DemoMode.includeForUser(email, DemoMode.isDemoStorage(s)));
       smallIdToName = DemoMode.filterSmallItemNames(email, smallIdToName);
 
-      // 储值金额按「储值时间在本周期内」的储值记录统计
-      var storagesInRange = await storageRepo.getByStorageDateRange(start, end);
+      // 储值金额、进货和出库共用同一筛选范围，并行读取减少等待。
+      final rangeData = await Future.wait<dynamic>([
+        storageRepo.getByStorageDateRange(start, end),
+        purchaseRepo.getByDateRange(start, end),
+        inventoryConsumptionRepo.getByDateRange(start, end),
+      ]);
+      var storagesInRange = rangeData[0] as List<StorageRecordModel>;
       storagesInRange = DemoMode.filterStorages(email, storagesInRange);
+      var purchasesInRange = rangeData[1] as List<InventoryPurchaseRecordModel>;
+      purchasesInRange = DemoMode.filterInventoryPurchases(
+        email,
+        purchasesInRange,
+        smallItemNames: smallIdToName,
+      ).where((record) => !record.isVoided).toList();
+      var inventoryConsumptionsInRange =
+          rangeData[2] as List<InventoryConsumptionRecordModel>;
+      inventoryConsumptionsInRange = DemoMode.filterInventoryConsumptions(
+        email,
+        inventoryConsumptionsInRange,
+        smallIdToName,
+      );
       final double totalAll = storagesInRange.fold<double>(0, (sum, s) => sum + s.amount);
 
       final bigCountsAll = <String, int>{};
@@ -749,10 +839,12 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         );
       }
 
-      if (mounted) {
+      if (current()) {
         final periodData = _PeriodSummaryData(
           all: summaryAll,
           byBigItem: byBigItem,
+          purchases: purchasesInRange,
+          inventoryConsumptions: inventoryConsumptionsInRange,
           consumptionStorageMap: storageMap,
           consumptionSmallNames: smallIdToName,
         );
@@ -762,19 +854,10 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           _analyticsLoading = false;
         });
       }
-    } catch (_) {
-      if (mounted) {
+    } catch (e) {
+      if (current()) {
         setState(() {
-          _consumptionTotal = 0;
-          _consumptionCount = 0;
-          _bigItemCounts = {};
-          _smallItemCounts = {};
-          _contributingStorages = [];
-          _bigItemConsumptions = {};
-          _smallItemConsumptions = {};
-          _consumptionStorageMap = {};
-          _consumptionSmallNames = {};
-          _bigItemFilterOptions = ['全部', '其他', ..._allBigItemNamesFromRepo];
+          _analyticsError = toUserFriendlyError(e);
           _analyticsLoading = false;
         });
       }
@@ -847,6 +930,134 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         _returningFromDrillDown = false;
       }
     });
+  }
+
+  void _showPurchaseDrillDown(BuildContext context) {
+    if (_purchaseRecords.isEmpty) return;
+    _returningFromDrillDown = true;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        minChildSize: 0.25,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (_, scrollController) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text('进货金额明细', style: Theme.of(context).textTheme.titleLarge),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                '共 ${_purchaseRecords.length} 笔进货 · 合计 ¥${_purchaseTotal.toStringAsFixed(2)}',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView.separated(
+                controller: scrollController,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                itemCount: _purchaseRecords.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, i) {
+                  final purchase = _purchaseRecords[i];
+                  final date = purchase.purchaseDate;
+                  final bigItems = purchase.storageBigItems
+                      .where((name) => name.isNotEmpty)
+                      .toSet()
+                      .join('、');
+                  final quantity = purchase.quantities.fold<int>(
+                    0,
+                    (sum, item) => sum + item,
+                  );
+                  return ListTile(
+                    title: Text(
+                      '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}'
+                      '${bigItems.isEmpty ? '' : ' · $bigItems'}'
+                      '${quantity > 0 ? ' · $quantity 件' : ''}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: (purchase.remark ?? '').trim().isEmpty
+                        ? null
+                        : Text(
+                            purchase.remark!.trim(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                    trailing: Text(
+                      '¥${purchase.totalAmount.toStringAsFixed(2)}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    onTap: () async {
+                      _restoringPurchaseSheet = true;
+                      Navigator.pop(ctx);
+                      final changed = await this.context.push<bool>(
+                        '/inventory/purchase/${purchase.id}',
+                      );
+                      if (!mounted) return;
+                      if (changed == true) {
+                        _pendingRefreshFromNotify = false;
+                        final key = _rangeCacheKey(
+                          _analyticsRangeStart,
+                          _analyticsRangeEnd,
+                        );
+                        _summaryCache.remove(key);
+                        setState(() => _analyticsLoading = true);
+                        await _loadConsumptionAnalytics();
+                      }
+                      if (!mounted) return;
+                      _restoringPurchaseSheet = false;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) _showPurchaseDrillDown(this.context);
+                      });
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    ).then((_) {
+      if (!_restoringPurchaseSheet &&
+          mounted &&
+          ModalRoute.of(this.context)?.isCurrent == true) {
+        _returningFromDrillDown = false;
+      }
+    });
+  }
+
+  Map<String, int> get _inventoryOutboundSummary {
+    final totals = <String, int>{};
+    for (final record in _inventoryOutboundRecords) {
+      if (record.isVoided) continue;
+      final name = _consumptionSmallNames[record.storageSmallItemId] ??
+          '已删除小项 #${record.storageSmallItemId}';
+      totals.update(name, (value) => value + record.quantity,
+          ifAbsent: () => record.quantity);
+    }
+    return Map.fromEntries(totals.entries.toList()..sort((a, b) {
+      final byQuantity = b.value.compareTo(a.value);
+      return byQuantity != 0 ? byQuantity : a.key.compareTo(b.key);
+    }));
+  }
+
+  Future<void> _openInlinePurchase(InventoryPurchaseRecordModel purchase) async {
+    _returningFromDrillDown = true;
+    final changed = await context.push<bool>('/inventory/purchase/${purchase.id}');
+    if (!mounted) return;
+    _returningFromDrillDown = false;
+    if (changed == true) {
+      _pendingRefreshFromNotify = false;
+      _summaryCache.remove(_rangeCacheKey(_analyticsRangeStart, _analyticsRangeEnd));
+      await _loadConsumptionAnalytics();
+    }
   }
 
   void _showConsumptionDrillDown(
@@ -933,6 +1144,13 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
 
   Future<void> _loadCalendarData() async {
     if (!mounted) return;
+    final epoch = ++_calendarLoadEpoch;
+    final auth = context.read<AuthService>();
+    final owner = auth.user?.id;
+    final cache = context.read<DataCache>();
+    final revision = cache.revision;
+    bool current() => mounted && epoch == _calendarLoadEpoch &&
+        auth.user?.id == owner && cache.revision == revision;
     final start = DateTime(_calendarSelectedMonth.year, _calendarSelectedMonth.month, 1);
     final end = DateTime(_calendarSelectedMonth.year, _calendarSelectedMonth.month + 1, 0);
     final cacheKey = 'month_${start.year}-${start.month.toString().padLeft(2, '0')}';
@@ -944,6 +1162,8 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         _calendarSmallNames = Map.from(cached.smallNames);
         _calendarRangeStart = start;
         _calendarRangeEnd = end;
+        _calendarHasLoaded = true;
+        _calendarError = null;
         _calendarLoading = false;
       });
       return;
@@ -951,16 +1171,16 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
 
     setState(() => _calendarLoading = true);
     try {
-      final consumptionRepo = context.read<ConsumptionRepository>();
+      setState(() => _calendarLoading = true);
+    final consumptionRepo = context.read<ConsumptionRepository>();
       final storageRepo = context.read<StorageRepository>();
       final smallItemRepo = context.read<StorageSmallItemRepository>();
       var consumptions = await consumptionRepo.getByDateRange(start, end);
       final storageIds = consumptions.map((c) => c.storageRecordId).toSet().toList();
-      final storageMap = <int, StorageRecordModel>{};
-      for (final id in storageIds) {
-        final s = await storageRepo.getById(id);
-        if (s != null) storageMap[id] = s;
-      }
+      final relatedStorages = await storageRepo.getByIds(storageIds);
+      final storageMap = {
+        for (final storage in relatedStorages) storage.id: storage,
+      };
       final smallOptions = await smallItemRepo.getAll();
       var smallNames = {for (var o in smallOptions) o.id: o.name};
       final email = context.read<AuthService>().user?.email;
@@ -980,7 +1200,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         list.sort((a, b) => a.consumptionDate.compareTo(b.consumptionDate));
       }
 
-      if (mounted) {
+      if (current()) {
         _calendarCache[cacheKey] = _CachedCalendarData(
           byDay: Map.from(byDay),
           storageMap: Map.from(storageMap),
@@ -992,15 +1212,15 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           _calendarSmallNames = smallNames;
           _calendarRangeStart = start;
           _calendarRangeEnd = end;
+          _calendarHasLoaded = true;
+          _calendarError = null;
           _calendarLoading = false;
         });
       }
-    } catch (_) {
-      if (mounted) {
+    } catch (e) {
+      if (current()) {
         setState(() {
-          _calendarByDay = {};
-          _calendarStorageMap = {};
-          _calendarSmallNames = {};
+          _calendarError = toUserFriendlyError(e);
           _calendarLoading = false;
         });
       }
@@ -1144,12 +1364,15 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool forceRefresh = false}) async {
     if (!mounted) return;
+    if (forceRefresh) {
+      context.read<RepositoryReadCache?>()?.clear();
+      context.read<DataCache>().removeByPrefix('analytics_preload');
+    }
     final cache = context.read<DataCache>();
-    final preload = cache.get<_AnalyticsPreloadResult>(_kAnalyticsPreloadCacheKey);
+    final preload = cache.take<_AnalyticsPreloadResult>(_analyticsPreloadKey(context));
     if (preload != null) {
-      cache.remove(_kAnalyticsPreloadCacheKey);
       _summaryCache[preload.periodSummaryCacheKey] = preload.periodSummary;
       _calendarCache[preload.calendarCacheKey] = preload.calendarData;
       _analyticsRangeStart = preload.analyticsRangeStart;
@@ -1168,32 +1391,33 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       _calendarRangeEnd = DateTime(preload.calendarSelectedMonth.year, preload.calendarSelectedMonth.month + 1, 0);
       if (mounted) {
         setState(() {
+          _hasLoaded = true;
           _loading = false;
           _error = null;
           _analyticsLoading = false;
+          _calendarHasLoaded = true;
+          _calendarError = null;
           _calendarLoading = false;
         });
       }
       return;
     }
-    // 预加载失败时提示用户并支持手动重试
-    final preloadFailed = cache.get<bool>('analytics_preload_failed') == true;
-    if (preloadFailed) {
-      cache.remove('analytics_preload_failed');
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = '预加载失败，请点击重试';
-        });
-      }
+    if (_loadInProgress) {
+      _pendingRefreshFromNotify = true;
       return;
     }
-    if (_loadInProgress) return;
     _loadInProgress = true;
+    final auth = context.read<AuthService>();
+    final owner = auth.user?.id;
+    final revision = cache.revision;
+    bool current() => mounted && auth.user?.id == owner && cache.revision == revision;
 
+    _summaryLoadEpoch++;
+    _calendarLoadEpoch++;
     _summaryCache.clear();
     _calendarCache.clear();
     final customerRepo = context.read<CustomerRepository>();
+    final storageRepo = context.read<StorageRepository>();
 
     setState(() {
       _loading = true;
@@ -1203,15 +1427,28 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
     try {
       final bigItemRepo = context.read<StorageBigItemRepository>();
       final email = context.read<AuthService>().user?.email;
-      var customers =
-          DemoMode.filterCustomers(email, await retryOnFailure(() => customerRepo.getAll()));
-      final bigOptions = await bigItemRepo.getAll();
-      final deposits = await Future.wait(
-        customers.map((c) => customerRepo.getTotalDeposit(c.name)),
+      final results = await Future.wait<dynamic>([
+        retryOnFailure(() => customerRepo.getAll()),
+        bigItemRepo.getAll(),
+        storageRepo.getAll(),
+      ]);
+      var customers = DemoMode.filterCustomers(
+        email,
+        results[0] as List<CustomerModel>,
       );
-      final depositByCustomer = {
-        for (var i = 0; i < customers.length; i++) customers[i].name: deposits[i],
-      };
+      final bigOptions = results[1] as List<StorageBigItemOption>;
+      final scopedStorages = DemoMode.filterStorages(
+        email,
+        results[2] as List<StorageRecordModel>,
+      );
+      final depositByCustomer = <String, double>{};
+      for (final storage in scopedStorages) {
+        depositByCustomer.update(
+          storage.customerName,
+          (value) => value + storage.amount,
+          ifAbsent: () => storage.amount,
+        );
+      }
       final sorted = customers.toList()
         ..sort((a, b) =>
             (depositByCustomer[b.name] ?? 0).compareTo(depositByCustomer[a.name] ?? 0));
@@ -1248,8 +1485,9 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         }
       }
 
-      if (mounted) {
+      if (current()) {
         setState(() {
+          _hasLoaded = true;
           _customers = sorted;
           _depositByCustomer = depositByCustomer;
           _birthdayThisWeek = birthdayThisWeek;
@@ -1257,11 +1495,10 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
           _allBigItemNamesFromRepo = bigOptions.map((o) => o.name).toList();
           _loading = false;
         });
-        await _loadConsumptionAnalytics();
-        await _loadCalendarData();
+        await Future.wait([_loadConsumptionAnalytics(), _loadCalendarData()]);
       }
     } catch (e) {
-      if (mounted) {
+      if (current()) {
         setState(() {
           _error = toUserFriendlyError(e);
           _loading = false;
@@ -1269,6 +1506,10 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       }
     } finally {
       _loadInProgress = false;
+      if (mounted && _pendingRefreshFromNotify && ModalRoute.of(context)?.isCurrent == true) {
+        _pendingRefreshFromNotify = false;
+        _load();
+      }
     }
   }
 
@@ -1334,25 +1575,25 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
       _lastRouteCurrent = false;
     }
 
-    if (_loading) {
+    if (_loading && !_hasLoaded) {
       return const Center(child: FullPageLoadingPlaceholder());
     }
     _scrollToTargetIfNeeded();
-    if (_error != null) {
+    if (_error != null && !_hasLoaded) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(_error!, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
             const SizedBox(height: 16),
-            FilledButton(onPressed: _load, child: const Text('重试')),
+            FilledButton(onPressed: () => _load(forceRefresh: true), child: const Text('重试')),
           ],
         ),
       );
     }
 
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: () => _load(forceRefresh: true),
       child: SingleChildScrollView(
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
@@ -1360,8 +1601,28 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (_loading) const LinearProgressIndicator(),
+            if (_error != null) MaterialBanner(
+              content: Text('刷新失败，显示上次加载的数据。$_error'),
+              actions: [TextButton(onPressed: () => _load(forceRefresh: true), child: const Text('重试'))],
+            ),
             Text('周期汇总', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
+            Card(
+              child: ExpansionTile(
+                title: const Text('筛选条件'),
+                subtitle: Text(
+                  '${_selectedBigItemFilter ?? '全部大项'} · '
+                  '${_analyticsRangeStart.month}/${_analyticsRangeStart.day} - '
+                  '${_analyticsRangeEnd.month}/${_analyticsRangeEnd.day}',
+                ),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
             // 第一级：全部 / 储值大项A / 储值大项B …
             Text('按储值大项', style: Theme.of(context).textTheme.labelLarge?.copyWith(color: Colors.grey[600])),
             const SizedBox(height: 6),
@@ -1462,8 +1723,19 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
                 ChoiceChip(selected: _isPresetSelected('本年'), label: const Text('本年'), onSelected: (_) => _setPresetRange('本年')),
               ],
             ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 16),
-            // 第三级：具体金额（储值金额汇总 + 大项/小项消费次数）
+            if (_analyticsError != null) MaterialBanner(
+              content: Text('周期汇总加载失败。${_lastSummaryRange == null ? '当前数据尚未加载。' : '显示 $_lastSummaryRange 上次成功的数据。'}$_analyticsError'),
+              actions: [TextButton(onPressed: _loadConsumptionAnalytics, child: const Text('重试周期汇总'))],
+            ),
+            // 第三级：经营金额（储值、进货）+ 大项/小项消费次数
+            if (_analyticsError == null || _lastSummaryRange != null) ...[
             Card(
               child: InkWell(
                 onTap: _analyticsLoading || _contributingStorages.isEmpty
@@ -1521,6 +1793,96 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
                     ],
                   ),
                 ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              child: ExpansionTile(
+                initiallyExpanded: _purchaseSummaryExpanded,
+                onExpansionChanged: (expanded) =>
+                    setState(() => _purchaseSummaryExpanded = expanded),
+                tilePadding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                title: Text('总进货', style: Theme.of(context).textTheme.titleMedium),
+                subtitle: _analyticsLoading
+                    ? const Padding(
+                        padding: EdgeInsets.only(top: 10),
+                        child: LinearProgressIndicator(),
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('¥${_purchaseTotal.toStringAsFixed(2)}',
+                              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context).colorScheme.secondary,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text('${_purchaseRecords.length} 笔进货 · 点击展开本筛选周期的记录与出库汇总',
+                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                            ),
+                          ],
+                        ),
+                      ),
+                children: _analyticsLoading ? const [] : [
+                  const Divider(height: 1),
+                  const SizedBox(height: 12),
+                  Align(alignment: Alignment.centerLeft,
+                    child: Text('近期进货记录', style: Theme.of(context).textTheme.titleSmall),
+                  ),
+                  const SizedBox(height: 4),
+                  if (_purchaseRecords.isEmpty)
+                    const ListTile(contentPadding: EdgeInsets.zero, title: Text('当前筛选周期暂无进货'))
+                  else
+                    ..._purchaseRecords.take(3).map((purchase) {
+                      final date = purchase.purchaseDate;
+                      final quantity = purchase.quantities.fold<int>(0, (sum, value) => sum + value);
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: Text('${date.month}/${date.day} · ${purchase.storageBigItems.toSet().join('、')}',
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text('$quantity 件'),
+                        trailing: Text('¥${purchase.totalAmount.toStringAsFixed(2)}'),
+                        onTap: () => _openInlinePurchase(purchase),
+                      );
+                    }),
+                  if (_purchaseRecords.length > 3)
+                    Align(alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: () => _showPurchaseDrillDown(context),
+                        child: Text('查看全部 ${_purchaseRecords.length} 笔进货'),
+                      ),
+                    ),
+                  const Divider(height: 24),
+                  Align(alignment: Alignment.centerLeft,
+                    child: Text('出库汇总', style: Theme.of(context).textTheme.titleSmall),
+                  ),
+                  const SizedBox(height: 4),
+                  if (_inventoryOutboundSummary.isEmpty)
+                    const ListTile(contentPadding: EdgeInsets.zero, title: Text('当前筛选周期暂无出库'))
+                  else
+                    ..._inventoryOutboundSummary.entries.take(6).map((entry) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: Text(entry.key),
+                      trailing: Text('共出库 ${entry.value} 件'),
+                    )),
+                  if (_inventoryOutboundSummary.length > 6)
+                    Align(alignment: Alignment.centerLeft,
+                      child: Text('其余 ${_inventoryOutboundSummary.length - 6} 种小项已纳入汇总',
+                        style: Theme.of(context).textTheme.bodySmall),
+                    ),
+                  Align(alignment: Alignment.centerLeft,
+                    child: Text(
+                      '统计范围：${_analyticsRangeStart.year}/${_analyticsRangeStart.month}/${_analyticsRangeStart.day} 至 ${_analyticsRangeEnd.year}/${_analyticsRangeEnd.month}/${_analyticsRangeEnd.day}；已撤销出库不计入。',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),
@@ -1626,6 +1988,7 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
               ),
             ),
             const SizedBox(height: 24),
+            ],
             Text('日历看板', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
             const SizedBox(height: 12),
@@ -1689,12 +2052,18 @@ class _StoreAnalyticsScreenState extends State<StoreAnalyticsScreen>
                 ],
               ),
             const SizedBox(height: 12),
+            if (_calendarError != null) MaterialBanner(
+              content: Text('日历加载失败。${_calendarHasLoaded ? '显示 ${_calendarRangeStart.year}年${_calendarRangeStart.month}月上次成功的数据。' : '当前日历尚未加载。'}$_calendarError'),
+              actions: [TextButton(onPressed: _loadCalendarData, child: const Text('重试日历'))],
+            ),
             _calendarLoading
                 ? const Padding(
                     padding: EdgeInsets.symmetric(vertical: 24),
                     child: Center(child: CircularProgressIndicator()),
                   )
-                : _MonthCalendarGrid(
+                : !_calendarHasLoaded
+                    ? const SizedBox.shrink()
+                    : _MonthCalendarGrid(
                         rangeStart: _calendarRangeStart,
                         rangeEnd: _calendarRangeEnd,
                         byDay: _calendarByDay,

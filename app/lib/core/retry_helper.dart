@@ -1,7 +1,7 @@
 /// 对可能因网络波动导致的 502/500、网络不可达、超时进行有限重试
 Future<T> retryOnFailure<T>(
   Future<T> Function() fn, {
-  int maxAttempts = 3,
+  int maxAttempts = 2,
   Duration delay = const Duration(milliseconds: 800),
 }) async {
   Object? lastError;

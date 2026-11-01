@@ -7,9 +7,14 @@ BEGIN;
 -- ========== 清除旧演示数据（按依赖顺序） ==========
 DELETE FROM inventory_consumption_records WHERE remark LIKE '演示%' OR remark LIKE '自动出库 · 演示-%';
 DELETE FROM inventory_supplementary_in_records WHERE remark LIKE '演示%';
-DELETE FROM inventory_purchase_records WHERE code LIKE 'JH90%';
-DELETE FROM consumption_records WHERE code LIKE 'XF90%';
-DELETE FROM storage_records WHERE code LIKE 'CZ90%' OR customer_name LIKE '演示-%';
+-- 业务编号使用全局序列；种子数据将序列推到 900xx 后，正式数据也会获得
+-- JH90/CZ90/XF90 编号。重置演示数据时严禁按编号前缀删除，只使用显式演示标记。
+DELETE FROM inventory_purchase_records WHERE remark LIKE '演示进货单-%';
+DELETE FROM consumption_records
+WHERE storage_record_id IN (
+  SELECT id FROM storage_records WHERE customer_name LIKE '演示-%'
+);
+DELETE FROM storage_records WHERE customer_name LIKE '演示-%';
 DELETE FROM customers WHERE name LIKE '演示-%';
 DELETE FROM storage_small_item_options WHERE name LIKE '演示-%';
 

@@ -82,6 +82,21 @@ class StorageNewParams {
   }
 }
 
+class InventoryPurchaseNewParams {
+  const InventoryPurchaseNewParams({this.initialBigItemId, this.initialSmallItemId});
+  final int? initialBigItemId;
+  final int? initialSmallItemId;
+
+  static InventoryPurchaseNewParams fromState(GoRouterState state) {
+    final extra = state.extra is Map<String, dynamic> ? state.extra as Map<String, dynamic>? : null;
+    int? readInt(Object? value) => value is int ? value : int.tryParse(value?.toString() ?? '');
+    return InventoryPurchaseNewParams(
+      initialBigItemId: readInt(extra?['initialBigItemId']),
+      initialSmallItemId: readInt(extra?['initialSmallItemId']),
+    );
+  }
+}
+
 class ConsumptionNewParams {
   const ConsumptionNewParams({this.storageId});
   final int? storageId;

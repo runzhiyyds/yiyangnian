@@ -6,6 +6,7 @@ import '../../core/data_cache.dart';
 import '../../core/data_refresh.dart';
 import '../../core/error_message.dart';
 import '../../core/lunar_helper.dart';
+import '../../core/write_request_id.dart';
 import '../../widgets/lunar_date_picker.dart';
 import 'customer_model.dart';
 import 'customer_repository.dart';
@@ -46,6 +47,7 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
   bool _loading = false;
   String? _error;
   List<StorageRecordModel> _templateStorages = [];
+  final String _createRequestId = newWriteRequestId();
 
   @override
   void initState() {
@@ -65,15 +67,18 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
   }
 
   static String _cacheKeyCustomer(String name) => 'customer_$name';
-  static String _cacheKeyTemplateStorages(String name) => 'storages_template_$name';
+  static String _cacheKeyTemplateStorages(String name) =>
+      'storages_template_$name';
 
   Future<void> _loadCustomer() async {
     final name = widget.customerName!;
     final cache = context.read<DataCache>();
+    final revision = cache.revision;
     var c = cache.get<CustomerModel>(_cacheKeyCustomer(name));
     if (c == null) {
       final repo = context.read<CustomerRepository>();
       c = await repo.getByName(name);
+      if (!mounted || cache.revision != revision) return;
       if (c != null) cache.set(_cacheKeyCustomer(name), c);
     }
     if (c != null && mounted) {
@@ -93,10 +98,14 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
   Future<void> _loadTemplate() async {
     final name = widget.templateName!;
     final cache = context.read<DataCache>();
-    var storages = cache.get<List<StorageRecordModel>>(_cacheKeyTemplateStorages(name));
+    final revision = cache.revision;
+    var storages = cache.get<List<StorageRecordModel>>(
+      _cacheKeyTemplateStorages(name),
+    );
     if (storages == null) {
       final storageRepo = context.read<StorageRepository>();
       storages = await storageRepo.getByCustomer(name);
+      if (!mounted || cache.revision != revision) return;
       cache.set(_cacheKeyTemplateStorages(name), storages);
     }
     if (mounted) {
@@ -123,8 +132,7 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
       _solarBirthday = d;
       final lunar = LunarHelper.solarToLunar(d);
       if (lunar != null) {
-        _lunarBirthdayText =
-            '${lunar.year}年${lunar.month}月${lunar.day}日';
+        _lunarBirthdayText = '${lunar.year}年${lunar.month}月${lunar.day}日';
       }
       _zodiacController.text = LunarHelper.getZodiacFromSolar(d);
       _ageController.text = LunarHelper.getAgeInYears(d).toString();
@@ -159,40 +167,48 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
           ? '${year}年闰${month}月${day}日'
           : '${year}年${month}月${day}日';
       final solar = isLeap
-          ? LunarHelper.lunarToSolarWithLeap(year, month, day, isLeapMonth: true)
+          ? LunarHelper.lunarToSolarWithLeap(
+              year,
+              month,
+              day,
+              isLeapMonth: true,
+            )
           : LunarHelper.lunarToSolar(year, month, day);
       if (solar != null) {
         _solarBirthday = solar;
         _zodiacController.text = LunarHelper.getZodiacFromSolar(solar);
         _ageController.text = LunarHelper.getAgeInYears(solar).toString();
-        _lifeNumberController.text = LunarHelper.getLifeNumber(solar).toString();
+        _lifeNumberController.text = LunarHelper.getLifeNumber(
+          solar,
+        ).toString();
       }
     });
   }
 
   Future<void> _save() async {
+    if (_loading) return;
     if (!_formKey.currentState!.validate()) return;
 
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('客户姓名不能为空')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('客户姓名不能为空')));
       return;
     }
 
     final customerRepo = context.read<CustomerRepository>();
-    final exists = await customerRepo.existsByName(name,
-        excludeName: widget.customerName);
+    final exists = await customerRepo.existsByName(
+      name,
+      excludeName: widget.customerName,
+    );
     if (exists) {
       if (mounted) {
         showDialog(
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text('客户姓名已存在'),
-            content: const Text(
-              '客户姓名已存在，可加后缀区分，如：张三_1、张三_新店',
-            ),
+            content: const Text('客户姓名已存在，可加后缀区分，如：张三_1、张三_新店'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
@@ -218,9 +234,11 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
         zodiac = _zodiacController.text.trim().isEmpty
             ? LunarHelper.getZodiacFromSolar(_solarBirthday!)
             : _zodiacController.text.trim();
-        age = int.tryParse(_ageController.text.trim()) ??
+        age =
+            int.tryParse(_ageController.text.trim()) ??
             LunarHelper.getAgeInYears(_solarBirthday!);
-        lifeNumber = int.tryParse(_lifeNumberController.text.trim()) ??
+        lifeNumber =
+            int.tryParse(_lifeNumberController.text.trim()) ??
             LunarHelper.getLifeNumber(_solarBirthday!);
       }
 
@@ -246,27 +264,32 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
         await customerRepo.update(widget.customerName!, customer);
       } else {
         await customerRepo.create(customer);
-        for (final s in _templateStorages) {
-          await context.read<StorageRepository>().create(StorageRecordModel(
-                id: 0,
-                code: '',
-                customerName: name,
-                storageBigItems: s.storageBigItems,
-                storageSmallItemIds: s.storageSmallItemIds,
-                amount: s.amount,
-                totalCount: s.totalCount,
-                storageDate: s.storageDate,
-                remark: s.remark,
-              ));
+        for (var index = 0; index < _templateStorages.length; index++) {
+          final s = _templateStorages[index];
+          await context.read<StorageRepository>().create(
+            StorageRecordModel(
+              id: 0,
+              code: '',
+              customerName: name,
+              storageBigItems: s.storageBigItems,
+              storageSmallItemIds: s.storageSmallItemIds,
+              amount: s.amount,
+              totalCount: s.totalCount,
+              storageDate: s.storageDate,
+              remark: s.remark,
+              clientRequestId: childWriteRequestId(_createRequestId, index),
+            ),
+          );
         }
       }
 
       if (mounted) {
         context.read<DataRefreshNotifier>().invalidateCustomerAndTree();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('保存成功')),
-        );
-        final nameChanged = widget.customerName != null && name != widget.customerName!;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('保存成功')));
+        final nameChanged =
+            widget.customerName != null && name != widget.customerName!;
         if (nameChanged) {
           context.go('/home/tree');
         } else {
@@ -313,11 +336,16 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
               const SizedBox(height: 16),
             ],
             Theme(
-              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              data: Theme.of(
+                context,
+              ).copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 initiallyExpanded: _basicExpanded,
                 onExpansionChanged: (v) => setState(() => _basicExpanded = v),
-                title: const Text('基本信息', style: TextStyle(fontWeight: FontWeight.w600)),
+                title: const Text(
+                  '基本信息',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
                 children: [
                   TextFormField(
                     controller: _nameController,
@@ -343,105 +371,140 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
             ),
             const SizedBox(height: 8),
             Theme(
-              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              data: Theme.of(
+                context,
+              ).copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 initiallyExpanded: _birthdayExpanded,
-                onExpansionChanged: (v) => setState(() => _birthdayExpanded = v),
-                title: const Text('生日相关', style: TextStyle(fontWeight: FontWeight.w600)),
+                onExpansionChanged: (v) =>
+                    setState(() => _birthdayExpanded = v),
+                title: const Text(
+                  '生日相关',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
                 children: [
                   ListTile(
                     title: const Text('公历生日'),
-              subtitle: Text(
-                _solarBirthday != null
-                    ? '${_solarBirthday!.year}年${_solarBirthday!.month}月${_solarBirthday!.day}日'
-                    : '请选择',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: const Icon(Icons.calendar_today),
-              onTap: () async {
-                final d = await showDatePicker(
-                  context: context,
-                  initialDate: _solarBirthday ?? DateTime.now(),
-                  firstDate: DateTime(1900),
-                  lastDate: DateTime.now(),
-                  locale: const Locale('zh', 'CN'),
-                );
-                if (d != null) _onSolarDatePicked(d);
-              },
-            ),
-            const SizedBox(height: 8),
-            ListTile(
-              key: ValueKey('lunar_$_lunarBirthdayText'),
-              isThreeLine: (_lunarBirthdayText ?? '').isNotEmpty,
-              title: const Text('农历生日'),
-              subtitle: Text(
-                _lunarBirthdayText ?? '请选择',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: const Icon(Icons.calendar_today),
-              onTap: () async {
-                int? y, m, d;
-                bool isLeap = false;
-                if (_lunarBirthdayText != null) {
-                  final parts = _lunarBirthdayText!.split(RegExp(r'[年月日\s]+'));
-                  if (parts.length >= 3) {
-                    y = int.tryParse(parts[0]);
-                    final mStr = parts[1].replaceFirst('闰', '');
-                    isLeap = parts[1].startsWith('闰');
-                    const cnMonths = ['正月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '冬月', '腊月'];
-                    m = int.tryParse(mStr);
-                    if (m == null) {
-                      final mi = cnMonths.indexWhere((x) => mStr == x || mStr.startsWith(x.substring(0, 1)));
-                      if (mi >= 0) m = mi + 1;
-                    }
-                    d = int.tryParse(parts[2]);
-                  }
-                }
-                final result = await LunarDatePicker.show(
-                  context,
-                  initialYear: y,
-                  initialMonth: m,
-                  initialDay: d,
-                  initialIsLeap: isLeap,
-                );
-                if (result != null) {
-                  _onLunarDatePicked(result.year, result.month, result.day, result.isLeap);
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            _buildCalculatedField(
-              label: '属相',
-              controller: _zodiacController,
-              hint: '由公历生日计算，谨慎修改',
-            ),
-            const SizedBox(height: 16),
-            _buildCalculatedField(
-              label: '年龄',
-              controller: _ageController,
-              hint: '由公历生日计算，谨慎修改',
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 16),
-            _buildCalculatedField(
-              label: '生命密码',
-              controller: _lifeNumberController,
-              hint: '由公历生日计算，谨慎修改',
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 16),
+                    subtitle: Text(
+                      _solarBirthday != null
+                          ? '${_solarBirthday!.year}年${_solarBirthday!.month}月${_solarBirthday!.day}日'
+                          : '请选择',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: const Icon(Icons.calendar_today),
+                    onTap: () async {
+                      final d = await showDatePicker(
+                        context: context,
+                        initialDate: _solarBirthday ?? DateTime.now(),
+                        firstDate: DateTime(1900),
+                        lastDate: DateTime.now(),
+                        locale: const Locale('zh', 'CN'),
+                      );
+                      if (d != null) _onSolarDatePicked(d);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  ListTile(
+                    key: ValueKey('lunar_$_lunarBirthdayText'),
+                    isThreeLine: (_lunarBirthdayText ?? '').isNotEmpty,
+                    title: const Text('农历生日'),
+                    subtitle: Text(
+                      _lunarBirthdayText ?? '请选择',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: const Icon(Icons.calendar_today),
+                    onTap: () async {
+                      int? y, m, d;
+                      bool isLeap = false;
+                      if (_lunarBirthdayText != null) {
+                        final parts = _lunarBirthdayText!.split(
+                          RegExp(r'[年月日\s]+'),
+                        );
+                        if (parts.length >= 3) {
+                          y = int.tryParse(parts[0]);
+                          final mStr = parts[1].replaceFirst('闰', '');
+                          isLeap = parts[1].startsWith('闰');
+                          const cnMonths = [
+                            '正月',
+                            '二月',
+                            '三月',
+                            '四月',
+                            '五月',
+                            '六月',
+                            '七月',
+                            '八月',
+                            '九月',
+                            '十月',
+                            '冬月',
+                            '腊月',
+                          ];
+                          m = int.tryParse(mStr);
+                          if (m == null) {
+                            final mi = cnMonths.indexWhere(
+                              (x) =>
+                                  mStr == x ||
+                                  mStr.startsWith(x.substring(0, 1)),
+                            );
+                            if (mi >= 0) m = mi + 1;
+                          }
+                          d = int.tryParse(parts[2]);
+                        }
+                      }
+                      final result = await LunarDatePicker.show(
+                        context,
+                        initialYear: y,
+                        initialMonth: m,
+                        initialDay: d,
+                        initialIsLeap: isLeap,
+                      );
+                      if (result != null) {
+                        _onLunarDatePicked(
+                          result.year,
+                          result.month,
+                          result.day,
+                          result.isLeap,
+                        );
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _buildCalculatedField(
+                    label: '属相',
+                    controller: _zodiacController,
+                    hint: '由公历生日计算，谨慎修改',
+                  ),
+                  const SizedBox(height: 16),
+                  _buildCalculatedField(
+                    label: '年龄',
+                    controller: _ageController,
+                    hint: '由公历生日计算，谨慎修改',
+                    keyboardType: TextInputType.number,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildCalculatedField(
+                    label: '生命密码',
+                    controller: _lifeNumberController,
+                    hint: '由公历生日计算，谨慎修改',
+                    keyboardType: TextInputType.number,
+                  ),
+                  const SizedBox(height: 16),
                 ],
               ),
             ),
             const SizedBox(height: 8),
             Theme(
-              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              data: Theme.of(
+                context,
+              ).copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 initiallyExpanded: _otherExpanded,
                 onExpansionChanged: (v) => setState(() => _otherExpanded = v),
-                title: const Text('其他信息', style: TextStyle(fontWeight: FontWeight.w600)),
+                title: const Text(
+                  '其他信息',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
                 children: [
                   TextFormField(
                     controller: _addressController,

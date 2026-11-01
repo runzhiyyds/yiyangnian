@@ -4,46 +4,24 @@ import 'package:provider/provider.dart';
 
 import '../../core/data_cache.dart';
 import '../../core/data_refresh.dart';
-import '../../core/error_message.dart';
-import '../../widgets/confirm_dialog.dart';
-import '../../widgets/loading_placeholder.dart';
-import '../../core/retry_helper.dart';
 import '../../core/demo_mode.dart';
+import '../../core/error_message.dart';
+import '../../core/retry_helper.dart';
+import '../../widgets/loading_placeholder.dart';
 import '../auth/auth_service.dart';
+import '../storage/storage_model.dart';
+import '../storage/storage_repository.dart';
 import '../storage_options/storage_small_item_repository.dart';
 import 'inventory_consumption_repository.dart';
 import 'inventory_models.dart';
+import 'inventory_movement.dart';
 import 'inventory_purchase_repository.dart';
 import 'inventory_supp_in_repository.dart';
-
-/// 入库记录来源：进货单 或 补充入库
-enum _InRecordSource { purchase, suppIn }
-
-class _InRecord {
-  _InRecordSource source;
-  dynamic data; // InventoryPurchaseRecordModel 或 InventorySuppInRecordModel
-  int smallItemId;
-  int quantity;
-  DateTime date;
-  String? displayTitle;
-  String? remark;
-
-  _InRecord({
-    required this.source,
-    required this.data,
-    required this.smallItemId,
-    required this.quantity,
-    required this.date,
-    this.displayTitle,
-    this.remark,
-  });
-}
+import 'widgets/inventory_linked_storages.dart';
+import 'widgets/inventory_movement_timeline.dart';
 
 class InventoryItemDetailScreen extends StatefulWidget {
-  const InventoryItemDetailScreen({
-    super.key,
-    required this.smallItemId,
-  });
+  const InventoryItemDetailScreen({super.key, required this.smallItemId});
 
   final int smallItemId;
 
@@ -55,8 +33,9 @@ class InventoryItemDetailScreen extends StatefulWidget {
 class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
   String _smallItemName = '';
   int _currentBalance = 0;
-  List<_InRecord> _inRecords = [];
-  List<InventoryConsumptionRecordModel> _outRecords = [];
+  List<InventoryMovement> _movements = const [];
+  List<StorageRecordModel> _linkedStorages = const [];
+  InventoryMovementFilter _filter = InventoryMovementFilter.all;
   bool _loading = true;
   String? _error;
   bool _loadInProgress = false;
@@ -71,7 +50,9 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
   }
 
   void _onDataChanged() {
-    if (mounted) _load();
+    if (!mounted) return;
+    context.read<DataCache>().remove(_cacheKey(context));
+    _load();
   }
 
   @override
@@ -93,8 +74,8 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
       setState(() {
         _smallItemName = cached.name;
         _currentBalance = cached.balance;
-        _inRecords = cached.inRecords;
-        _outRecords = cached.outRecords;
+        _movements = cached.movements;
+        _linkedStorages = cached.linkedStorages;
         _loading = false;
         _error = null;
       });
@@ -102,7 +83,6 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
     }
     if (_loadInProgress) return;
     _loadInProgress = true;
-
     setState(() {
       _loading = true;
       _error = null;
@@ -113,112 +93,87 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
       final suppInRepo = context.read<InventorySuppInRepository>();
       final consumptionRepo = context.read<InventoryConsumptionRepository>();
       final smallItemRepo = context.read<StorageSmallItemRepository>();
-
+      final storageRepo = context.read<StorageRepository>();
       final results = await Future.wait([
         retryOnFailure(() => purchaseRepo.getAll()),
         retryOnFailure(() => suppInRepo.getBySmallItemId(widget.smallItemId)),
-        retryOnFailure(() => consumptionRepo.getBySmallItemId(widget.smallItemId)),
+        retryOnFailure(
+          () => consumptionRepo.getBySmallItemId(widget.smallItemId),
+        ),
         retryOnFailure(() => smallItemRepo.getAll()),
+        retryOnFailure(() => storageRepo.getAll()),
       ]);
+      if (!mounted) return;
 
       final purchases = results[0] as List<InventoryPurchaseRecordModel>;
-      final suppIns = results[1] as List<InventorySuppInRecordModel>;
-      final consumptions = results[2] as List<InventoryConsumptionRecordModel>;
+      final supplementaryIn = results[1] as List<InventorySuppInRecordModel>;
+      final outbound = results[2] as List<InventoryConsumptionRecordModel>;
       final smallOptions = results[3] as List<StorageSmallItemOption>;
+      final storages = results[4] as List<StorageRecordModel>;
       final email = context.read<AuthService>().user?.email;
-
+      final scopedStorages = DemoMode.filterStorages(email, storages);
+      final sourceStorages = {
+        for (final record in scopedStorages) record.id: record,
+      };
+      final linkedStorages = scopedStorages
+          .where(
+            (record) => record.storageSmallItemIds.contains(widget.smallItemId),
+          )
+          .toList(growable: false);
       final name = smallOptions
-          .firstWhere((o) => o.id == widget.smallItemId,
-              orElse: () => StorageSmallItemOption(
-                  id: widget.smallItemId, name: '小项${widget.smallItemId}'))
+          .firstWhere(
+            (option) => option.id == widget.smallItemId,
+            orElse: () => StorageSmallItemOption(
+              id: widget.smallItemId,
+              name: '小项${widget.smallItemId}',
+            ),
+          )
           .name;
 
       if (!DemoMode.smallItemVisibleToUser(email, name)) {
-        if (mounted) {
-          setState(() {
-            _smallItemName = name;
-            _currentBalance = 0;
-            _inRecords = [];
-            _outRecords = [];
-            _loading = false;
-            _error = '当前账号无法查看该小项数据';
-          });
-        }
+        setState(() {
+          _smallItemName = name;
+          _currentBalance = 0;
+          _movements = const [];
+          _loading = false;
+          _error = '当前账号无法查看该小项数据';
+        });
         return;
       }
 
       final scoped = DemoMode.scopeInventoryRaw(
         email: email,
         purchases: purchases,
-        suppIn: suppIns,
-        consumptions: consumptions,
+        suppIn: supplementaryIn,
+        consumptions: outbound,
         smallOptions: smallOptions,
       );
-
-      final inRecords = <_InRecord>[];
-      for (var p in scoped.purchases) {
-        for (var i = 0;
-            i < p.storageSmallItemIds.length &&
-                i < p.storageBigItems.length &&
-                i < p.quantities.length;
-            i++) {
-          if (p.storageSmallItemIds[i] == widget.smallItemId) {
-            inRecords.add(_InRecord(
-              source: _InRecordSource.purchase,
-              data: p,
-              smallItemId: widget.smallItemId,
-              quantity: p.quantities[i],
-              date: p.purchaseDate,
-              displayTitle: '进货',
-              remark: p.remark,
-            ));
-          }
-        }
-      }
-      for (var r in scoped.suppIn) {
-        inRecords.add(_InRecord(
-          source: _InRecordSource.suppIn,
-          data: r,
-          smallItemId: r.storageSmallItemId,
-          quantity: r.quantity,
-          date: r.supplementDate,
-          displayTitle: '补充入库',
-          remark: r.remark,
-        ));
-      }
-      inRecords.sort((a, b) => b.date.compareTo(a.date));
-
-      var balance = 0;
-      for (var r in inRecords) {
-        balance += r.quantity;
-      }
-      for (var r in scoped.consumptions) {
-        balance -= r.quantity;
-      }
-
-      final scopedOutRecords = scoped.consumptions;
-
+      final movements = InventoryMovementLedger.forItem(
+        smallItemId: widget.smallItemId,
+        purchases: scoped.purchases,
+        supplementaryIn: scoped.suppIn,
+        outbound: scoped.consumptions,
+        sourceStorages: sourceStorages,
+      );
+      final balance = movements.isEmpty ? 0 : movements.first.balanceAfter;
       final cachedData = _ItemDetailCache(
         name: name,
         balance: balance,
-        inRecords: inRecords,
-        outRecords: scopedOutRecords,
+        movements: movements,
+        linkedStorages: linkedStorages,
       );
-
-      if (mounted) {
-        cache.set(cacheKey, cachedData);
-        setState(() {
-          _smallItemName = name;
-          _currentBalance = balance;
-          _inRecords = inRecords;
-          _outRecords = scopedOutRecords;
-          _loading = false;
-        });
-      }
-    } catch (e) {
+      cache.set(cacheKey, cachedData);
+      setState(() {
+        _smallItemName = name;
+        _currentBalance = balance;
+        _movements = movements;
+        _linkedStorages = linkedStorages;
+        _loading = false;
+      });
+    } catch (error) {
       if (mounted) {
         setState(() {
-          _error = toUserFriendlyError(e);
+          _error = toUserFriendlyError(error);
           _loading = false;
         });
       }
@@ -227,116 +182,69 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
     }
   }
 
-  Future<void> _confirmDeleteSuppIn(InventorySuppInRecordModel r) async {
-    final ok = await showConfirmDeleteDialog(
-      context,
-      title: '删除补充入库',
-      content: '确定删除该补充入库记录吗？',
-    );
-    if (ok != true || !mounted) return;
-    try {
-      await context.read<InventorySuppInRepository>().delete(r.id);
-      if (mounted) {
-        context.read<DataRefreshNotifier>().invalidateInventory();
-        context.read<DataCache>().remove(_cacheKey(context));
-        _load();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('删除失败：${toUserFriendlyError(e)}')),
-        );
-      }
-    }
+  List<InventoryMovement> get _visibleMovements => switch (_filter) {
+    InventoryMovementFilter.all => _movements,
+    InventoryMovementFilter.inbound =>
+      _movements.where((movement) => movement.delta > 0).toList(),
+    InventoryMovementFilter.outbound =>
+      _movements.where((movement) => movement.delta < 0).toList(),
+  };
+
+  Future<void> _openMovement(InventoryMovement movement) async {
+    await context.push(movement.route);
+    if (!mounted) return;
+    context.read<DataCache>().remove(_cacheKey(context));
+    context.read<DataRefreshNotifier>().invalidateInventory();
+    await _load();
   }
 
-  Future<void> _confirmDeletePurchase(InventoryPurchaseRecordModel p) async {
-    final ok = await showConfirmDeleteDialog(
-      context,
-      title: '删除进货记录',
-      content: '确定删除该进货记录吗？删除后该进货单中所有商品的数量将从库存中扣除。',
-    );
-    if (ok != true || !mounted) return;
-    try {
-      await context.read<InventoryPurchaseRepository>().delete(p.id);
-      if (mounted) {
-        context.read<DataRefreshNotifier>().invalidateInventory();
-        context.read<DataCache>().remove(_cacheKey(context));
-        _load();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('删除失败：${toUserFriendlyError(e)}')),
-        );
-      }
-    }
+  Future<void> _openSourceStorage(int storageId) async {
+    await context.push('/storage/$storageId');
+    if (!mounted) return;
+    context.read<DataCache>().remove(_cacheKey(context));
+    await _load();
   }
 
-  Future<void> _confirmDeleteConsumption(InventoryConsumptionRecordModel r) async {
-    final src = r.sourceStorageRecordId;
-    final title = src != null ? '撤销出库（回退库存）' : '删除出库记录';
-    final content = src != null
-        ? '该条为新建储值时的自动出库。删除后本小项库存将增加 ${r.quantity}，客户名下的储值记录不会自动删除。'
-        : '确定删除该出库记录吗？删除后库存将增加 ${r.quantity}。';
-    final ok = await showConfirmDeleteDialog(
-      context,
-      title: title,
-      content: content,
+  Future<void> _openLinkedStorages() async {
+    final uri = Uri(
+      path: '/inventory/item/${widget.smallItemId}/storages',
+      queryParameters: {'name': _smallItemName},
     );
-    if (ok != true || !mounted) return;
-    try {
-      await context.read<InventoryConsumptionRepository>().delete(r.id);
-      if (mounted) {
-        context.read<DataRefreshNotifier>().invalidateInventory();
-        context.read<DataCache>().remove(_cacheKey(context));
-        _load();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('删除失败：${toUserFriendlyError(e)}')),
-        );
-      }
-    }
+    await context.push(uri.toString());
+    if (!mounted) return;
+    context.read<DataCache>().remove(_cacheKey(context));
+    await _load();
   }
 
-  String _formatOutDate(InventoryConsumptionRecordModel r) =>
-      '${r.consumptionDate.year}-${r.consumptionDate.month.toString().padLeft(2, '0')}-${r.consumptionDate.day.toString().padLeft(2, '0')}';
-
-  static final _remarkStripAutoPrefix = RegExp(r'^储值出库\s+\S+\s+');
-
-  String _compactOutboundRemark(String? remark) {
-    if (remark == null || remark.trim().isEmpty) return '';
-    var s = remark.trim();
-    s = s.replaceFirst(_remarkStripAutoPrefix, '');
-    if (s.startsWith('自动出库 ·')) {
-      s = s.substring('自动出库 ·'.length).trim();
-    }
-    return s;
+  Future<void> _openNew(String path) async {
+    final uri = Uri(
+      path: path,
+      queryParameters: {
+        'item': widget.smallItemId.toString(),
+        'name': _smallItemName,
+      },
+    );
+    await context.push(uri.toString());
+    if (!mounted) return;
+    context.read<DataCache>().remove(_cacheKey(context));
+    context.read<DataRefreshNotifier>().invalidateInventory();
+    await _load();
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(
-        body: Center(child: FullPageLoadingPlaceholder()),
-      );
+      return const Scaffold(body: Center(child: FullPageLoadingPlaceholder()));
     }
     if (_error != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('库存详情')),
+        appBar: AppBar(
+          title: Text(_smallItemName.isEmpty ? '库存详情' : _smallItemName),
+        ),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(_error!, style: TextStyle(color: Colors.red[800])),
-                const SizedBox(height: 20),
-                FilledButton(onPressed: _load, child: const Text('重试')),
-              ],
-            ),
+            child: Text(_error!, style: const TextStyle(color: Colors.red)),
           ),
         ),
       );
@@ -346,21 +254,15 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
       appBar: AppBar(
         title: Text(_smallItemName),
         actions: [
-          TextButton.icon(
-            icon: const Icon(Icons.add),
-            label: const Text('补充入库'),
-            onPressed: () {
-              final uri = Uri(path: '/inventory/supp-in/new', queryParameters: {'item': widget.smallItemId.toString(), 'name': _smallItemName});
-              context.push(uri.toString());
-            },
+          IconButton(
+            tooltip: '补充入库',
+            onPressed: () => _openNew('/inventory/supp-in/new'),
+            icon: const Icon(Icons.add_circle_outline),
           ),
-          TextButton.icon(
-            icon: const Icon(Icons.remove),
-            label: const Text('出库'),
-            onPressed: () {
-              final uri = Uri(path: '/inventory/supp-out/new', queryParameters: {'item': widget.smallItemId.toString(), 'name': _smallItemName});
-              context.push(uri.toString());
-            },
+          IconButton(
+            tooltip: '出库',
+            onPressed: () => _openNew('/inventory/supp-out/new'),
+            icon: const Icon(Icons.remove_circle_outline),
           ),
         ],
       ),
@@ -378,10 +280,24 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('当前库存', style: Theme.of(context).textTheme.titleMedium),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '当前库存',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '由全部有效库存变化计算',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
                     Text(
-                      '$_currentBalance',
-                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      '$_currentBalance件',
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(
                             color: Theme.of(context).colorScheme.primary,
                             fontWeight: FontWeight.bold,
                           ),
@@ -390,108 +306,68 @@ class _InventoryItemDetailScreenState extends State<InventoryItemDetailScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            Text('入库记录', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            ..._inRecords.map((r) => Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  child: ListTile(
-                    title: Text(r.displayTitle ?? '入库'),
-                    subtitle: Text(
-                      '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}-${r.date.day.toString().padLeft(2, '0')} · 数量 ${r.quantity}${r.remark != null && r.remark!.isNotEmpty ? ' · ${r.remark}' : ''}',
+            const SizedBox(height: 18),
+            InventoryLinkedStoragesEntry(
+              count: _linkedStorages.length,
+              onTap: _openLinkedStorages,
+            ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '库存变化记录',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('+${r.quantity}', style: TextStyle(color: Colors.green[700])),
-                        if (r.source == _InRecordSource.suppIn)
-                          IconButton(
-                            icon: const Icon(Icons.edit, size: 20),
-                            onPressed: () => context.push('/inventory/supp-in/${r.data.id}/edit'),
-                          ),
-                        if (r.source == _InRecordSource.suppIn)
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline, size: 20),
-                            onPressed: () => _confirmDeleteSuppIn(r.data),
-                          ),
-                        if (r.source == _InRecordSource.purchase) ...[
-                          IconButton(
-                            icon: const Icon(Icons.edit, size: 20),
-                            onPressed: () => context.push('/inventory/purchase/${r.data.id}/edit'),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline, size: 20),
-                            onPressed: () => _confirmDeletePurchase(r.data),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                )),
-            const SizedBox(height: 24),
-            Text('出库记录', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            ..._outRecords.map((r) {
-              final src = r.sourceStorageRecordId;
-              final extra = _compactOutboundRemark(r.remark);
-              final subtitleText = extra.isEmpty
-                  ? '数量 ${r.quantity} · ${src != null ? '自动' : '手工'}'
-                  : '数量 ${r.quantity} · ${src != null ? '自动' : '手工'} · $extra';
-              return Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  title: Text(_formatOutDate(r)),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(subtitleText),
-                      if (src != null)
-                        TextButton(
-                          style: TextButton.styleFrom(
-                            padding: EdgeInsets.zero,
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          onPressed: () => context.push('/storage/$src'),
-                          child: const Text('关联储值'),
-                        ),
-                    ],
-                  ),
-                  isThreeLine: src != null,
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('-${r.quantity}', style: TextStyle(color: Colors.orange[700])),
-                      IconButton(
-                        icon: const Icon(Icons.edit, size: 20),
-                        onPressed: () => context.push('/inventory/supp-out/${r.id}/edit'),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 20),
-                        tooltip: src != null ? '撤销出库' : '删除',
-                        onPressed: () => _confirmDeleteConsumption(r),
-                      ),
-                    ],
                   ),
                 ),
-              );
-            }),
+                Text(
+                  '${_visibleMovements.length}条',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              children: [
+                _filterChip('全部', InventoryMovementFilter.all),
+                _filterChip('增加', InventoryMovementFilter.inbound),
+                _filterChip('减少', InventoryMovementFilter.outbound),
+              ],
+            ),
+            const SizedBox(height: 10),
+            InventoryMovementTimeline(
+              movements: _visibleMovements,
+              onTap: _openMovement,
+              onOpenSourceStorage: _openSourceStorage,
+            ),
           ],
         ),
       ),
     );
   }
+
+  Widget _filterChip(String label, InventoryMovementFilter value) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: _filter == value,
+      onSelected: (_) => setState(() => _filter = value),
+    );
+  }
 }
 
 class _ItemDetailCache {
-  _ItemDetailCache({
+  const _ItemDetailCache({
     required this.name,
     required this.balance,
-    required this.inRecords,
-    required this.outRecords,
+    required this.movements,
+    required this.linkedStorages,
   });
+
   final String name;
   final int balance;
-  final List<_InRecord> inRecords;
-  final List<InventoryConsumptionRecordModel> outRecords;
+  final List<InventoryMovement> movements;
+  final List<StorageRecordModel> linkedStorages;
 }
