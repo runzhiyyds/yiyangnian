@@ -24,6 +24,8 @@ class InventoryPurchaseEditScreen extends StatefulWidget {
     this.initialReadOnly = false,
     this.initialBigItemId,
     this.initialSmallItemId,
+    this.initialSmallItemOption,
+    this.initialBigItemOption,
   });
 
   final int? purchaseId;
@@ -34,6 +36,8 @@ class InventoryPurchaseEditScreen extends StatefulWidget {
   /// 从储值页“去进货”进入时预选的大项与小项。
   final int? initialBigItemId;
   final int? initialSmallItemId;
+  final StorageSmallItemOption? initialSmallItemOption;
+  final StorageBigItemOption? initialBigItemOption;
 
   @override
   State<InventoryPurchaseEditScreen> createState() =>
@@ -157,10 +161,12 @@ class _InventoryPurchaseEditScreenState
 
   void _ensureInitialLine() {
     if (_lines.isNotEmpty || _bigItemOptions.isEmpty) return;
-    final requestedSmall = widget.initialSmallItemId == null
+    final requestedSmallId =
+        widget.initialSmallItemOption?.id ?? widget.initialSmallItemId;
+    final requestedSmall = requestedSmallId == null
         ? null
         : _smallItemOptions
-              .where((item) => item.id == widget.initialSmallItemId)
+              .where((item) => item.id == requestedSmallId)
               .firstOrNull;
     final requestedBigId =
         requestedSmall?.storageBigItemId ?? widget.initialBigItemId;
@@ -229,10 +235,14 @@ class _InventoryPurchaseEditScreenState
     final keySmall = _cacheKeySmall(context);
     final email = context.read<AuthService>().user?.email;
     // 从储值新建商品进入时必须重新读取，不能使用创建前的选项快照。
-    var big = widget.initialSmallItemId != null
+    var big =
+        widget.initialSmallItemId != null ||
+            widget.initialSmallItemOption != null
         ? null
         : cache.get<List<StorageBigItemOption>>(keyBig);
-    var small = widget.initialSmallItemId != null
+    var small =
+        widget.initialSmallItemId != null ||
+            widget.initialSmallItemOption != null
         ? null
         : cache.get<List<StorageSmallItemOption>>(keySmall);
     if (big == null || small == null) {
@@ -248,8 +258,18 @@ class _InventoryPurchaseEditScreenState
       }
     }
     if (mounted) {
-      final bigList = big;
-      final smallList = small;
+      // 携带刚刚创建成功的商品快照，避免旧列表/延迟读取丢失预选。
+      final bigList = List<StorageBigItemOption>.of(big);
+      final smallList = List<StorageSmallItemOption>.of(small);
+      final initialBig = widget.initialBigItemOption;
+      final initialSmall = widget.initialSmallItemOption;
+      if (initialBig != null && !bigList.any((o) => o.id == initialBig.id)) {
+        bigList.add(initialBig);
+      }
+      if (initialSmall != null &&
+          !smallList.any((o) => o.id == initialSmall.id)) {
+        smallList.add(initialSmall);
+      }
       setState(() {
         _bigItemOptions = bigList;
         _smallItemOptions = smallList;

@@ -8,6 +8,7 @@ import '../customer/customer_repository.dart';
 import '../inventory/inventory_consumption_repository.dart';
 import '../inventory/inventory_models.dart';
 import '../inventory/inventory_purchase_repository.dart';
+import '../inventory/inventory_purchase_edit_screen.dart';
 import '../inventory/inventory_supp_in_repository.dart';
 import '../inventory/widgets/quantity_stepper.dart';
 import '../storage_options/storage_big_item_repository.dart';
@@ -64,6 +65,7 @@ class StorageEditScreen extends StatefulWidget {
 
 class _StorageEditScreenState extends State<StorageEditScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _scrollController = ScrollController();
   late TextEditingController _customerController;
   late TextEditingController _codeController;
   late TextEditingController _amountController;
@@ -90,6 +92,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
   int _draftIndex = 0;
   bool _savedCurrent = false;
   bool _batchSaving = false;
+  final Set<int> _pendingRestockIds = {};
 
   _StorageDraft _captureDraft() => _StorageDraft(
     bigId: _selectedBigItemId,
@@ -142,6 +145,9 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
         _StorageDraft(date: DateTime.now(), requestId: newWriteRequestId()),
       );
       _loadDraft(_drafts.length - 1);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scrollController.hasClients) _scrollController.jumpTo(0);
     });
   }
 
@@ -418,6 +424,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _inventoryBalanceNotifier.dispose();
     _customerController.dispose();
     _amountController.removeListener(_onAmountChanged);
@@ -534,12 +541,19 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
   Future<void> _continuePurchaseForSmallItem(
     StorageSmallItemOption option,
   ) async {
-    final purchaseId = await context.push<int?>(
-      '/inventory/purchase/new',
-      extra: {
-        'initialBigItemId': option.storageBigItemId,
-        'initialSmallItemId': option.id,
-      },
+    setState(() => _pendingRestockIds.add(option.id));
+    final bigOption = _bigItemOptions
+        .where((big) => big.id == option.storageBigItemId)
+        .firstOrNull;
+    final purchaseId = await Navigator.of(context).push<int>(
+      MaterialPageRoute(
+        builder: (_) => InventoryPurchaseEditScreen(
+          initialBigItemId: option.storageBigItemId,
+          initialSmallItemId: option.id,
+          initialSmallItemOption: option,
+          initialBigItemOption: bigOption,
+        ),
+      ),
     );
     if (!mounted) return;
     context.read<DataRefreshNotifier>().invalidateInventory();
@@ -555,6 +569,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
       setState(() {
         _cachedInventoryBalances = balances;
         _inventoryBalancesLoading = false;
+        if (balance > 0) _pendingRestockIds.remove(option.id);
         if (balance > 0 && !_selectedSmallItemIds.contains(option.id)) {
           _selectedSmallItemIds.add(option.id);
           _outQtyBySmallItemId[option.id] = 1;
@@ -936,6 +951,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
           next.add(opt);
         }
         _smallItemOptions = next..sort((a, b) => a.name.compareTo(b.name));
+        _pendingRestockIds.add(opt.id);
       });
       if (widget.storageId == null) {
         _inventoryBalanceNotifier.value = null;
@@ -962,7 +978,6 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
         ),
       );
       if (shouldPurchase == true && mounted) {
-        // 新建对话来自小项底部弹层，先关闭弹层再进入进货页。
         await _continuePurchaseForSmallItem(opt);
       }
       return opt.id;
@@ -1054,11 +1069,40 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
           ),
         ],
       ),
+      bottomNavigationBar: isEdit
+          ? null
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '本次共 ${_drafts.isEmpty ? 1 : _drafts.length} 笔储值\n填写后点击右上角保存全部',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed:
+                          _saving || _optionsLoading || _optionsError != null
+                          ? null
+                          : _addDraft,
+                      icon: const Icon(Icons.add),
+                      label: const Text('再加一笔储值'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
       body: Stack(
         children: [
           Form(
             key: _formKey,
             child: ListView(
+              controller: _scrollController,
               padding: const EdgeInsets.all(16),
               children: [
                 if (_optionsLoading) const LinearProgressIndicator(),
@@ -1076,11 +1120,6 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
                               ? null
                               : (_) => _selectDraft(index),
                         ),
-                      ActionChip(
-                        avatar: const Icon(Icons.add, size: 18),
-                        label: const Text('再加一笔储值'),
-                        onPressed: _saving ? null : _addDraft,
-                      ),
                       if (_drafts.length > 1 && !_savedCurrent)
                         ActionChip(
                           avatar: const Icon(Icons.close, size: 18),
@@ -1240,6 +1279,31 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
                             autoSelectCreated: false,
                             onRestock: _continuePurchaseForSmallItem,
                           ),
+                        if (!isEdit)
+                          ..._pickerSmallOptions
+                              .where(
+                                (option) =>
+                                    _pendingRestockIds.contains(option.id),
+                              )
+                              .map(
+                                (option) => ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(
+                                    Icons.inventory_2_outlined,
+                                  ),
+                                  title: Text(option.name),
+                                  subtitle: Text(
+                                    _inventoryBalancesLoading
+                                        ? '正在核对库存…'
+                                        : '待进货 · 库存充足后才能选入储值',
+                                  ),
+                                  trailing: TextButton(
+                                    onPressed: () =>
+                                        _continuePurchaseForSmallItem(option),
+                                    child: const Text('去进货'),
+                                  ),
+                                ),
+                              ),
                         if (showOutboundSection) ...[
                           const SizedBox(height: 20),
                           const Divider(),
