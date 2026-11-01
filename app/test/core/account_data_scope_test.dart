@@ -7,6 +7,47 @@ import 'package:yiyangnian/features/storage/storage_model.dart';
 import 'package:yiyangnian/features/storage_options/storage_small_item_repository.dart';
 
 void main() {
+  group('CloudBase owner-isolated data', () {
+    setUp(() => AccountDataScope.useLegacyNameIsolation = false);
+    tearDown(() => AccountDataScope.useLegacyNameIsolation = true);
+
+    test('体验账号普通名称小项及已进货库存不能被旧前缀规则隐藏', () {
+      final scoped = AccountDataScope.scopeInventoryRaw(
+        email: DemoCredentials.email,
+        purchases: [
+          InventoryPurchaseRecordModel(
+            id: 134,
+            code: 'JH00134',
+            purchaseDate: DateTime(2026, 11, 1),
+            storageBigItems: ['藏红方'],
+            storageSmallItemIds: [110],
+            quantities: [2],
+          ),
+        ],
+        suppIn: [],
+        consumptions: [],
+        smallOptions: [StorageSmallItemOption(id: 110, name: '测试1101')],
+      );
+      expect(scoped.smallOptions.single.id, 110);
+      expect(scoped.purchases.single.id, 134);
+      expect(
+        AccountDataScope.computeInventoryBalances(
+          purchases: scoped.purchases,
+          suppIn: scoped.suppIn,
+          consumptions: scoped.consumptions,
+          smallOptions: scoped.smallOptions,
+        )[110],
+        2,
+      );
+      expect(
+        AccountDataScope.filterSmallItemNames(DemoCredentials.email, {
+          110: '测试1101',
+        }),
+        {110: '测试1101'},
+      );
+    });
+  });
+
   group('AccountDataScope inventory purchase ownership fallback', () {
     final demoPurchase = InventoryPurchaseRecordModel(
       id: 101,

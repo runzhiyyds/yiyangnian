@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app.dart';
 import 'core/app_providers.dart';
+import 'core/account_data_scope.dart';
 import 'core/config.dart';
 import 'core/network/supabase_http_client.dart';
 import 'core/supabase_auth_options.dart';
@@ -33,6 +34,9 @@ void main() async {
       };
 
       final authOptions = supabaseAuthOptions(Config.backendUrl);
+      AccountDataScope.useLegacyNameIsolation = !Uri.parse(
+        Config.backendUrl,
+      ).host.endsWith('.api.tcloudbasegateway.com');
       if (Config.isBackendConfigured) {
         await Supabase.initialize(
           url: Config.backendUrl,

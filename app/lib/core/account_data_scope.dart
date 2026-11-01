@@ -5,12 +5,14 @@ import '../features/consumption/consumption_model.dart';
 import '../features/inventory/inventory_models.dart';
 import '../features/storage_options/storage_small_item_repository.dart';
 
-/// 按登录账号隔离「演示域」与「正式域」数据视图。
-///
-/// - 体验账号 [DemoCredentials.email]：仅见「演示-」客户/商品关联数据
-/// - 其他账号：仅见正式数据，隐藏全部演示数据
+/// 数据展示范围。CloudBase 由服务端 owner_id/RLS 隔离账号；
+/// 迁移前共享数据源可启用旧版「演示-」名称过滤。
 class AccountDataScope {
   AccountDataScope._();
+
+  /// 仅供迁移前共享数据源使用。CloudBase 已由 owner_id/RLS 隔离账号，
+  /// 再用名称过滤会隐藏体验账号自己创建的普通名称商品与进货记录。
+  static bool useLegacyNameIsolation = true;
 
   static const demoPrefix = '演示-';
 
@@ -26,7 +28,8 @@ class AccountDataScope {
 
   /// 当前账号是否应展示该条数据（演示域 vs 正式域）
   static bool includeForUser(String? email, bool isDemoData) =>
-      isDemoScope(email) ? isDemoData : !isDemoData;
+      !useLegacyNameIsolation ||
+      (isDemoScope(email) ? isDemoData : !isDemoData);
 
   static bool isDemoTagged(String? name) =>
       name != null && name.startsWith(demoPrefix);
