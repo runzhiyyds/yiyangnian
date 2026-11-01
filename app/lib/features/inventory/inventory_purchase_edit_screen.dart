@@ -228,8 +228,13 @@ class _InventoryPurchaseEditScreenState
     final keyBig = _cacheKeyBig(context);
     final keySmall = _cacheKeySmall(context);
     final email = context.read<AuthService>().user?.email;
-    var big = cache.get<List<StorageBigItemOption>>(keyBig);
-    var small = cache.get<List<StorageSmallItemOption>>(keySmall);
+    // 从储值新建商品进入时必须重新读取，不能使用创建前的选项快照。
+    var big = widget.initialSmallItemId != null
+        ? null
+        : cache.get<List<StorageBigItemOption>>(keyBig);
+    var small = widget.initialSmallItemId != null
+        ? null
+        : cache.get<List<StorageSmallItemOption>>(keySmall);
     if (big == null || small == null) {
       final bigRepo = context.read<StorageBigItemRepository>();
       final smallRepo = context.read<StorageSmallItemRepository>();

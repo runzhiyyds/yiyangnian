@@ -23,6 +23,29 @@ import '../../core/formula_helper.dart';
 import '../../core/write_request_id.dart';
 import '../auth/auth_service.dart';
 
+class _StorageDraft {
+  _StorageDraft({
+    this.bigId,
+    this.smallIds = const [],
+    this.quantities = const {},
+    this.amount = '',
+    this.count = '',
+    this.remark = '',
+    required this.date,
+    required this.requestId,
+    this.saved = false,
+  });
+  final int? bigId;
+  final List<int> smallIds;
+  final Map<int, int> quantities;
+  final String amount;
+  final String count;
+  final String remark;
+  final DateTime date;
+  final String requestId;
+  final bool saved;
+}
+
 class StorageEditScreen extends StatefulWidget {
   const StorageEditScreen({
     super.key,
@@ -62,7 +85,65 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
   bool _optionsLoading = true;
   String? _optionsError;
   String? _error;
-  final String _createRequestId = newWriteRequestId();
+  String _createRequestId = newWriteRequestId();
+  final List<_StorageDraft> _drafts = [];
+  int _draftIndex = 0;
+  bool _savedCurrent = false;
+  bool _batchSaving = false;
+
+  _StorageDraft _captureDraft() => _StorageDraft(
+    bigId: _selectedBigItemId,
+    smallIds: List.of(_selectedSmallItemIds),
+    quantities: Map.of(_outQtyBySmallItemId),
+    amount: _amountController.text,
+    count: _totalCountController.text,
+    remark: _remarkController.text,
+    date: _storageDate,
+    requestId: _createRequestId,
+    saved: _savedCurrent,
+  );
+
+  void _loadDraft(int index) {
+    final draft = _drafts[index];
+    _draftIndex = index;
+    _selectedBigItemId = draft.bigId;
+    _selectedSmallItemIds = List.of(draft.smallIds);
+    _outQtyBySmallItemId
+      ..clear()
+      ..addAll(draft.quantities);
+    _amountController.text = draft.amount;
+    _totalCountController.text = draft.count;
+    _remarkController.text = draft.remark;
+    _storageDate = draft.date;
+    _createRequestId = draft.requestId;
+    _savedCurrent = draft.saved;
+  }
+
+  void _selectDraft(int index) {
+    setState(() {
+      _drafts[_draftIndex] = _captureDraft();
+      _loadDraft(index);
+    });
+  }
+
+  void _addDraft() {
+    if (!_formKey.currentState!.validate() ||
+        _selectedBigItemId == null ||
+        _selectedSmallItemIds.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先填写本笔储值的大项、小项和金额')));
+      return;
+    }
+    setState(() {
+      if (_drafts.isEmpty) _drafts.add(_captureDraft());
+      _drafts[_draftIndex] = _captureDraft();
+      _drafts.add(
+        _StorageDraft(date: DateTime.now(), requestId: newWriteRequestId()),
+      );
+      _loadDraft(_drafts.length - 1);
+    });
+  }
 
   /// 各小项当前库存余额（与保存校验同源），供小项选择器角标与保存时复用
   Map<int, int>? _cachedInventoryBalances;
@@ -509,10 +590,52 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
     }
     _saveInProgress = true;
     try {
-      await _saveInternal();
+      if (_drafts.isEmpty) {
+        await _saveInternal();
+      } else {
+        _drafts[_draftIndex] = _captureDraft();
+        for (var index = 0; index < _drafts.length; index++) {
+          final draft = _drafts[index];
+          if (draft.saved) continue;
+          final amount =
+              double.tryParse(draft.amount) ?? tryParseFormula(draft.amount);
+          final count = draft.count.trim().isEmpty
+              ? 0
+              : int.tryParse(draft.count);
+          if (draft.bigId == null ||
+              draft.smallIds.isEmpty ||
+              amount == null ||
+              amount < 0 ||
+              count == null ||
+              count < 0) {
+            setState(() => _loadDraft(index));
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('请完善第 ${index + 1} 笔储值后再保存全部')),
+            );
+            return;
+          }
+        }
+        _batchSaving = true;
+        for (var index = 0; index < _drafts.length; index++) {
+          if (_drafts[index].saved) continue;
+          setState(() => _loadDraft(index));
+          _cachedInventoryBalances = null;
+          await _saveInternal();
+          if (!mounted) return;
+          _drafts[index] = _captureDraft();
+          if (!_savedCurrent) return;
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${_drafts.length} 笔储值已全部保存并自动出库')),
+          );
+          context.pop();
+        }
+      }
     } catch (e) {
       if (mounted) setState(() => _error = toUserFriendlyError(e));
     } finally {
+      _batchSaving = false;
       _saveInProgress = false;
       if (mounted) _endSavingOverlay();
     }
@@ -750,6 +873,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
       }
 
       if (mounted) {
+        _savedCurrent = true;
         final refresh = context.read<DataRefreshNotifier>();
         final didAutoOutbound =
             isNew &&
@@ -770,7 +894,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
             duration: Duration(seconds: widget.storageId != null ? 5 : 2),
           ),
         );
-        context.pop();
+        if (!_batchSaving) context.pop();
       }
     } catch (e) {
       if (mounted) {
@@ -839,7 +963,6 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
       );
       if (shouldPurchase == true && mounted) {
         // 新建对话来自小项底部弹层，先关闭弹层再进入进货页。
-        Navigator.of(context).maybePop();
         await _continuePurchaseForSmallItem(opt);
       }
       return opt.id;
@@ -927,7 +1050,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Text('保存'),
+                : Text(_drafts.isEmpty ? '保存' : '保存全部（${_drafts.length}笔）'),
           ),
         ],
       ),
@@ -939,6 +1062,42 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
               padding: const EdgeInsets.all(16),
               children: [
                 if (_optionsLoading) const LinearProgressIndicator(),
+                if (!isEdit) ...[
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (var index = 0; index < _drafts.length; index++)
+                        ChoiceChip(
+                          label: Text(
+                            '第 ${index + 1} 笔${_drafts[index].saved ? ' · 已保存' : ''}',
+                          ),
+                          selected: index == _draftIndex,
+                          onSelected: _saving || _drafts[index].saved
+                              ? null
+                              : (_) => _selectDraft(index),
+                        ),
+                      ActionChip(
+                        avatar: const Icon(Icons.add, size: 18),
+                        label: const Text('再加一笔储值'),
+                        onPressed: _saving ? null : _addDraft,
+                      ),
+                      if (_drafts.length > 1 && !_savedCurrent)
+                        ActionChip(
+                          avatar: const Icon(Icons.close, size: 18),
+                          label: const Text('移除此笔'),
+                          onPressed: _saving
+                              ? null
+                              : () => setState(() {
+                                  _drafts.removeAt(_draftIndex);
+                                  _loadDraft(
+                                    _draftIndex.clamp(0, _drafts.length - 1),
+                                  );
+                                }),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (_optionsError != null)
                   MaterialBanner(
                     content: Text(_optionsError!),
@@ -998,7 +1157,7 @@ class _StorageEditScreenState extends State<StorageEditScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '一个大项对应一笔储值；其他大项请另建一笔储值',
+                          '可添加多笔储值，填写完成后统一保存',
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(
                                 color: Theme.of(context).colorScheme.outline,

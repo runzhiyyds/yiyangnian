@@ -208,30 +208,47 @@ void main() {
       );
     });
 
-    test('rewrites PostgREST path and removes Supabase apikey', () async {
-      late http.BaseRequest forwarded;
-      final client = SupabaseHttpClient(
-        inner: _Transport((request) async {
-          forwarded = request;
-          return http.StreamedResponse(Stream.value(utf8.encode('[]')), 200);
-        }),
-      );
+    test(
+      'rewrites PostgREST path and removes CORS-unsafe Supabase headers',
+      () async {
+        late http.BaseRequest forwarded;
+        final client = SupabaseHttpClient(
+          inner: _Transport((request) async {
+            forwarded = request;
+            return http.StreamedResponse(Stream.value(utf8.encode('[]')), 200);
+          }),
+        );
 
-      final response = await client.get(
-        cloudBase.replace(path: '/rest/v1/customers', query: 'select=name'),
-        headers: {
-          'apikey': 'legacy-anon-key',
-          'authorization': 'Bearer access-token',
-        },
-      );
+        final response = await client.get(
+          cloudBase.replace(path: '/rest/v1/customers', query: 'select=name'),
+          headers: {
+            'apikey': 'legacy-anon-key',
+            'authorization': 'Bearer access-token',
+            'x-supabase-api-version': '2024-01-01',
+            'x-supabase-client-platform': 'web',
+            'x-supabase-client-platform-version': '1',
+            'x-client-info': 'supabase-flutter/2.12.0',
+          },
+        );
 
-      expect(forwarded.url.path, '/v1/rdb/rest/customers');
-      expect(forwarded.url.query, 'select=name');
-      expect(forwarded.headers, isNot(contains('apikey')));
-      expect(forwarded.headers['authorization'], 'Bearer access-token');
-      expect(response.body, '[]');
-      client.close();
-    });
+        expect(forwarded.url.path, '/v1/rdb/rest/customers');
+        expect(forwarded.url.query, 'select=name');
+        expect(forwarded.headers, isNot(contains('apikey')));
+        expect(forwarded.headers, isNot(contains('x-supabase-api-version')));
+        expect(
+          forwarded.headers,
+          isNot(contains('x-supabase-client-platform')),
+        );
+        expect(
+          forwarded.headers,
+          isNot(contains('x-supabase-client-platform-version')),
+        );
+        expect(forwarded.headers['x-client-info'], 'supabase-flutter/2.12.0');
+        expect(forwarded.headers['authorization'], 'Bearer access-token');
+        expect(response.body, '[]');
+        client.close();
+      },
+    );
 
     test(
       'adapts password grant and enriches token with a Supabase user',
@@ -245,6 +262,18 @@ void main() {
               expect(request.url.hasQuery, isFalse);
               expect(request.headers, isNot(contains('apikey')));
               expect(request.headers, isNot(contains('authorization')));
+              expect(
+                request.headers,
+                isNot(contains('x-supabase-api-version')),
+              );
+              expect(
+                request.headers,
+                isNot(contains('x-supabase-client-platform')),
+              );
+              expect(
+                request.headers,
+                isNot(contains('x-supabase-client-platform-version')),
+              );
               final body = jsonDecode(await request.finalize().bytesToString());
               expect(body, {
                 'password': 'test-password',
@@ -300,6 +329,9 @@ void main() {
             'apikey': 'cloudbase-public',
             'authorization': 'Bearer cloudbase-public',
             'content-type': 'application/json',
+            'x-supabase-api-version': '2024-01-01',
+            'x-supabase-client-platform': 'web',
+            'x-supabase-client-platform-version': '1',
           },
           body: jsonEncode({
             'email': 'User@example.com',

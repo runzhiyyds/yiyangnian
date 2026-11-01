@@ -254,7 +254,7 @@ Future<_CloudBaseAdaptation> _adaptCloudBaseRequest(
   }
 
   if (target == source.url && jsonBody == null) {
-    source.headers.remove('apikey');
+    _removeCloudBaseUnsupportedHeaders(source.headers);
     return _CloudBaseAdaptation(
       source,
       responseKind: responseKind,
@@ -267,7 +267,7 @@ Future<_CloudBaseAdaptation> _adaptCloudBaseRequest(
     ..followRedirects = source.followRedirects
     ..maxRedirects = source.maxRedirects
     ..persistentConnection = source.persistentConnection;
-  request.headers.remove('apikey');
+  _removeCloudBaseUnsupportedHeaders(request.headers);
   if (responseKind == _CloudBaseResponseKind.token) {
     request.headers.remove('authorization');
   }
@@ -282,6 +282,18 @@ Future<_CloudBaseAdaptation> _adaptCloudBaseRequest(
     responseKind: responseKind,
     originalEmail: originalEmail,
   );
+}
+
+/// CloudBase 网关的 CORS 预检不允许 Supabase SDK 的版本/平台头。
+/// 这些头只用于 Supabase 服务端协商，移除不会改变 CloudBase 语义。
+void _removeCloudBaseUnsupportedHeaders(Map<String, String> headers) {
+  const unsupported = {
+    'apikey',
+    'x-supabase-api-version',
+    'x-supabase-client-platform',
+    'x-supabase-client-platform-version',
+  };
+  headers.removeWhere((name, _) => unsupported.contains(name.toLowerCase()));
 }
 
 String cloudBaseUsernameForEmail(String email) {

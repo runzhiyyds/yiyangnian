@@ -267,6 +267,9 @@ class _PickerSheetState extends State<_PickerSheet> {
                       },
                     );
                     if (name != null && name.isNotEmpty) {
+                      if (!widget.autoSelectCreated) {
+                        Navigator.pop(context);
+                      }
                       final newId = await widget.onCreateNew(name);
                       if (context.mounted &&
                           newId != null &&
@@ -307,8 +310,8 @@ class _PickerSheetState extends State<_PickerSheet> {
                       : outOfStock && widget.onRestock != null
                       ? TextButton(
                           onPressed: () async {
+                            Navigator.pop(context);
                             await widget.onRestock!(opt);
-                            if (context.mounted) setState(() {});
                           },
                           child: const Text('去进货'),
                         )
